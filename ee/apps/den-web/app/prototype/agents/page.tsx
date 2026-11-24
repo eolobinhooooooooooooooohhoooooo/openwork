@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DenSegmented } from "../../(den)/_components/ui/segmented";
 import type { AccessDraft } from "../../(den)/dashboard/_components/access-summary";
 import { ADMIN, AdminDashboard, type AdminTab } from "./den";
@@ -8,19 +8,24 @@ import { DesktopApp, type DesktopView } from "./desktop";
 import {
   type Access,
   type Agent,
+  type AgentColor,
+  type AgentSession,
   type ChatCard,
   type ChatTurn,
   type ConnectorId,
+  type RunAsk,
   type Scenario,
   type SetupStepId,
   DEFAULT_ACCESS,
   DEFAULT_CONNECTED,
   ME,
   MEMBER,
+  ASK_EXPIRES_MS,
   agentFromDraft,
+  canChange,
   answerSetup,
   applyRun,
-  askAgent,
+  changesTheAgent,
   clockNow,
   connectorById,
   copyAgent,
@@ -28,12 +33,15 @@ import {
   giveJob,
   inMyList,
   interpretChat,
+  isMemoryQuestion,
   isMine,
   keepManagers,
   noTools,
   noteAsksFirst,
   sampleAgents,
-  simulateRun,
+  settleRun,
+  startSession,
+  stoppedRun,
   toolsForLevel,
 } from "./model";
 
@@ -47,6 +55,33 @@ const VIEWER_NOTE: Record<Viewer, string> = {
   member: `You are ${MEMBER.name}, a member. Everything about your agents is here, in the OpenWork app.`,
   admin: `You are ${ADMIN.name}, an admin. These rules apply to every member's agents.`,
 };
+
+// At the start one agent's routine is waiting on an OK, so the sidebar shows an agent that needs you.
+function seedSessions(agents: Agent[]): AgentSession[] {
+  const agent = agents.find((entry) => entry.id === "agent-notes");
+  const routine = agent?.routines[0];
+  if (!agent || !routine) return [];
+  const now = Date.now();
+  const session = startSession(agent, DEFAULT_ACCESS, DEFAULT_CONNECTED, { id: "run-seed", when: clockAt(now - 6 * 60 * 1000), kind: "routine", routine, nowMs: now - 6 * 60 * 1000, working: true });
+  return [{ ...session, state: session.ask ? "needs_you" : "working", shown: session.run.steps.length }];
+}
+
+function clockAt(ms: number): string {
+  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(new Date(ms));
+}
+
+// Up to the admin's number per agent work at once. The rest wait their turn, oldest first.
+function promote(sessions: AgentSession[], access: Access): AgentSession[] {
+  const busy: Record<string, number> = {};
+  for (const session of sessions) {
+    if (session.kind !== "ask" && session.state !== "waiting") busy[session.agentId] = (busy[session.agentId] ?? 0) + 1;
+  }
+  return sessions.map((session) => {
+    if (session.state !== "waiting" || (busy[session.agentId] ?? 0) >= access.atOnce) return session;
+    busy[session.agentId] = (busy[session.agentId] ?? 0) + 1;
+    return { ...session, state: "working" };
+  });
+}
 
 // Everything read, except the newest run of one agent, so a fresh message shows in the sidebar.
 function startingSeen(agents: Agent[]): Record<string, number> {
@@ -70,17 +105,89 @@ export default function AgentsPrototypePage() {
   const [access, setAccess] = useState<Access>(DEFAULT_ACCESS);
   const [connected, setConnected] = useState<Record<ConnectorId, boolean>>(DEFAULT_CONNECTED);
   const [removed, setRemoved] = useState<Agent | null>(null);
-  const [runningId, setRunningId] = useState<string | null>(null);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [contextId, setContextId] = useState<string | null>(null);
-  const [asking, setAsking] = useState<{ agentId: string; question: string } | null>(null);
   const [seenRuns, setSeenRuns] = useState<Record<string, number>>(() => startingSeen(sampleAgents()));
   const [desktopView, setDesktopView] = useState<DesktopView>({ kind: "chat" });
+  const [sessions, setSessions] = useState<AgentSession[]>(() => seedSessions(sampleAgents()));
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const counter = useRef(0);
+  // The latest of each, for the clock below. It works out every change first, then sets state once.
+  const live = useRef({ agents, sessions, access });
+  live.current = { agents, sessions, access };
 
   const nextId = (prefix: string) => {
     counter.current += 1;
     return `${prefix}-${counter.current}`;
+  };
+
+  // Ends sessions and puts their runs in the agents' conversations. Waiting ones then take the free slots.
+  const finish = (done: { session: AgentSession; answer: RunAsk["state"] | null; stopped?: boolean }[], rest: AgentSession[]) => {
+    const current = live.current;
+    let nextAgents = current.agents;
+    for (const { session, answer, stopped } of done) {
+      nextAgents = nextAgents.map((agent) => {
+        if (agent.id !== session.agentId) return agent;
+        const run = stopped ? stoppedRun(session) : settleRun(agent, session, answer);
+        const allowed = answer === "always" && session.ask
+          ? { ...agent.tools, [session.ask.connector]: [...agent.tools[session.ask.connector], session.ask.tool] }
+          : agent.tools;
+        return applyRun({ ...agent, tools: allowed }, run);
+      });
+    }
+    setAgents(nextAgents);
+    setSessions(promote(rest, current.access));
+  };
+
+  // The clock: every beat each working session shows one more step, then reports back or stops to ask.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setNowMs(now);
+      const { sessions: current } = live.current;
+      if (current.length === 0) return;
+      const done: { session: AgentSession; answer: RunAsk["state"] | null }[] = [];
+      const rest: AgentSession[] = [];
+      let changed = false;
+      for (const session of current) {
+        if (session.state === "needs_you" && session.ask?.background && now - session.ask.raisedMs > ASK_EXPIRES_MS) {
+          done.push({ session, answer: "expired" });
+          changed = true;
+        } else if (session.state !== "working") {
+          rest.push(session);
+        } else if (session.shown < session.run.steps.length) {
+          rest.push({ ...session, shown: session.shown + 1 });
+          changed = true;
+        } else if (session.ask) {
+          rest.push({ ...session, state: "needs_you", ask: { ...session.ask, raisedMs: now } });
+          changed = true;
+        } else {
+          done.push({ session, answer: null });
+          changed = true;
+        }
+      }
+      if (!changed) return;
+      if (done.length > 0) finish(done, rest);
+      else setSessions(rest);
+    }, 900);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const begin = (agentId: string, kind: AgentSession["kind"], options: { routineId?: string; asked?: string } = {}) => {
+    const agent = agents.find((entry) => entry.id === agentId);
+    if (!agent) return;
+    const routine = agent.routines.find((entry) => entry.id === options.routineId);
+    const busy = sessions.filter((session) => session.agentId === agentId && session.kind !== "ask" && session.state !== "waiting").length;
+    const session = startSession(agent, access, connected, {
+      id: nextId("run"),
+      when: clockNow(),
+      kind,
+      routine,
+      asked: options.asked,
+      nowMs: Date.now(),
+      working: kind === "ask" || busy < access.atOnce,
+    });
+    setSessions((current) => [...current, session]);
   };
 
   const readingId = viewer === "member" && desktopView.kind === "agent" ? desktopView.agentId : null;
@@ -108,38 +215,82 @@ export default function AgentsPrototypePage() {
     setAgents((current) => current.map((agent) => (agent.id === id ? { ...agent, ...patch } : agent)));
   };
 
-  // "Run now" runs the agent once on its instructions. Testing a routine runs that routine.
-  const runAgent = (id: string, routineId?: string) => {
-    const runId = nextId("run");
-    const when = clockNow();
-    setRunningId(id);
+  const patchWith = (id: string, change: (agent: Agent) => Partial<Agent>) => {
+    setAgents((current) => current.map((agent) => (agent.id === id ? { ...agent, ...change(agent) } : agent)));
+  };
+
+  // "Run now" runs the agent once on its instructions, in a fresh session. Testing a routine runs that routine.
+  const runAgent = (id: string, routineId?: string) => begin(id, routineId ? "routine" : "run", { routineId });
+
+  const stopSession = (sessionId: string) => {
+    const session = sessions.find((entry) => entry.id === sessionId);
+    if (!session) return;
+    const rest = sessions.filter((entry) => entry.id !== sessionId);
+    if (session.state === "waiting") setSessions(rest);
+    else finish([{ session, answer: null, stopped: true }], rest);
+  };
+
+  const answerAsk = (sessionId: string, answer: RunAsk["state"]) => {
+    const session = sessions.find((entry) => entry.id === sessionId);
+    if (!session) return;
+    finish([{ session, answer }], sessions.filter((entry) => entry.id !== sessionId));
+  };
+
+  // A message in the conversation. While it works, a message goes first and changes its course.
+  const sendTo = (agentId: string, text: string) => {
+    const agent = agents.find((entry) => entry.id === agentId);
+    if (!agent) return;
+    const working = sessions.find((session) => session.agentId === agentId && session.kind === "ask");
+    if (working) {
+      setSessions((current) => current.map((session) => (session.id === working.id ? { ...session, heard: [...session.heard, text] } : session)));
+      return;
+    }
+    if (isMemoryQuestion(text)) {
+      patchAgent(agentId, { memoryChecks: [...agent.memoryChecks, agent.runs.length] });
+      return;
+    }
+    if (/\brun\b|\bcheck now\b/i.test(text)) {
+      runAgent(agentId);
+      return;
+    }
+    if (!canChange(agent) || text.endsWith("?")) {
+      begin(agentId, "ask", { asked: text });
+      return;
+    }
+    addNote(agentId, text);
+  };
+
+  // A reply in a thread is about that run only. Asking it to change for good is taken to the conversation.
+  const replyInThread = (agentId: string, runId: string, text: string) => {
+    if (!text) return;
+    const mineId = nextId("reply");
+    const theirsId = nextId("reply");
+    const agent = agents.find((entry) => entry.id === agentId);
+    const run = agent?.runs.find((entry) => entry.id === runId);
+    const lasting = changesTheAgent(text);
+    const answer = lasting
+      ? "That would change how I work every time, so it belongs in our conversation. In a thread I only talk about this run."
+      : `About this run only: ${run?.steps[0]?.label.toLowerCase() ?? "I went through what I could see"}, and nothing else came up. Want me to look closer at one of them?`;
+    patchWith(agentId, (current) => ({ replies: [...current.replies, { id: mineId, runId, from: ME, text }] }));
     window.setTimeout(() => {
-      setAgents((current) => current.map((agent) => {
-        if (agent.id !== id) return agent;
-        const routine = agent.routines.find((entry) => entry.id === routineId);
-        return applyRun(agent, simulateRun(agent, access, connected, when, runId, routine));
-      }));
-      setRunningId(null);
+      patchWith(agentId, (current) => ({ replies: [...current.replies, { id: theirsId, runId, from: "agent", text: answer, move: lasting ? { text, done: false } : undefined }] }));
     }, 700);
   };
 
-  // A question is answered in the asker's own thread, with the asker's own accounts.
-  const askQuestion = (id: string, question: string) => {
-    const runId = nextId("run");
-    const when = clockNow();
-    setRunningId(id);
-    setAsking({ agentId: id, question });
-    window.setTimeout(() => {
-      setAgents((current) => current.map((agent) => (agent.id === id ? applyRun(agent, askAgent(agent, access, connected, question, when, runId)) : agent)));
-      setRunningId(null);
-      setAsking(null);
-    }, 900);
+  const moveReply = (agentId: string, replyId: string) => {
+    const agent = agents.find((entry) => entry.id === agentId);
+    const reply = agent?.replies.find((entry) => entry.id === replyId);
+    if (!agent || !reply?.move || reply.move.done) return;
+    const said = reply.move.text;
+    patchWith(agentId, (current) => ({ replies: current.replies.map((entry) => (entry.id === replyId && entry.move ? { ...entry, move: { ...entry.move, done: true } } : entry)) }));
+    addNote(agentId, said);
   };
 
   const removeAgent = (agent: Agent) => {
     setAgents((current) => current.filter((entry) => entry.id !== agent.id));
     setRemoved(agent);
-    if (desktopView.kind === "agent" && desktopView.agentId === agent.id) setDesktopView({ kind: "agents" });
+    setSessions((current) => current.filter((session) => session.agentId !== agent.id));
+    if (desktopView.kind === "agent" && desktopView.agentId === agent.id) setDesktopView({ kind: "chat" });
   };
 
   const undoRemove = () => {
@@ -154,16 +305,16 @@ export default function AgentsPrototypePage() {
     const id = nextId("agent");
     setAgents((current) => [...current, copyAgent(agent, id, access)]);
     markThreadRead();
-    setDesktopView({ kind: "agent", agentId: id, settings: true });
+    setDesktopView({ kind: "agent", agentId: id, panel: "settings", thread: null });
   };
 
   // A new agent is a named draft. It opens in its own thread, where the first message is its job.
-  const createAgent = (name: string) => {
+  const createAgent = (name: string, color: AgentColor) => {
     if (agents.filter(isMine).length >= access.maxAgents) return;
     const id = nextId("agent");
-    setAgents((current) => [...current, draftAgent(id, name, access)]);
+    setAgents((current) => [...current, { ...draftAgent(id, name, access), color }]);
     markThreadRead();
-    setDesktopView({ kind: "agent", agentId: id, settings: false });
+    setDesktopView({ kind: "agent", agentId: id, panel: null, thread: null });
   };
 
   // Saying the job again starts the setup cards over, so they match what was said last.
@@ -249,6 +400,7 @@ export default function AgentsPrototypePage() {
     setScenario(next);
     setAgents(fresh);
     setSeenRuns(startingSeen(fresh));
+    setSessions(seedSessions(fresh));
     setRemoved(null);
     setTurns([]);
     setContextId(null);
@@ -301,14 +453,17 @@ export default function AgentsPrototypePage() {
           connected={connected}
           turns={turns}
           unreadIds={unreadIds}
-          runningId={runningId}
-          asking={asking}
+          sessions={sessions}
+          nowMs={nowMs}
           onAsk={askChat}
           onCard={resolveCard}
+          onSend={sendTo}
           onRun={runAgent}
-          onNote={addNote}
+          onStop={stopSession}
+          onAnswerAsk={answerAsk}
           onAnswerNote={answerNote}
-          onQuestion={askQuestion}
+          onReply={replyInThread}
+          onMoveReply={moveReply}
           onPatch={patchAgent}
           removed={removed}
           onRemove={removeAgent}

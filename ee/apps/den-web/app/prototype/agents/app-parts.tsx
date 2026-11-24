@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUp, ChevronRight, Plus, type SquarePen } from "lucide-react";
+import { ArrowUp, ChevronRight, Plus, Square, type SquarePen } from "lucide-react";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import { type Connector, PRESET_LABEL, presetOf, toolCount } from "./model";
 
@@ -65,7 +65,8 @@ export function PaneHeader({ title, sub, children }: { title: string; sub?: Reac
   );
 }
 
-export function Composer({ value, onChange, onSubmit, placeholder, disabled = false, focus = false, note }: {
+// While it works the composer stays open: a message goes first and can change its course, and the round button stops it.
+export function Composer({ value, onChange, onSubmit, placeholder, disabled = false, focus = false, note, working = false, onStop }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
@@ -73,8 +74,11 @@ export function Composer({ value, onChange, onSubmit, placeholder, disabled = fa
   disabled?: boolean;
   focus?: boolean;
   note?: string;
+  working?: boolean;
+  onStop?: () => void;
 }) {
   const ready = !disabled && value.trim().length > 0;
+  const stops = working && !ready && onStop !== undefined;
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (ready) onSubmit();
@@ -104,15 +108,28 @@ export function Composer({ value, onChange, onSubmit, placeholder, disabled = fa
             <span className="grid size-7 place-items-center rounded-full text-[#60646c]"><Plus className="size-4" aria-hidden /></span>
             Auto
           </span>
-          <button
-            type="submit"
-            disabled={!ready}
-            aria-label="Send"
-            data-testid="chat-send"
-            className="grid size-8 place-items-center rounded-full bg-[#011627] text-white transition-opacity disabled:opacity-25"
-          >
-            <ArrowUp className="size-4" aria-hidden />
-          </button>
+          {stops ? (
+            <button
+              type="button"
+              onClick={onStop}
+              aria-label="Stop now"
+              title="Stop now"
+              data-testid="chat-stop"
+              className="grid size-8 place-items-center rounded-full bg-[#011627] text-white"
+            >
+              <Square className="size-3 fill-current" aria-hidden />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!ready}
+              aria-label="Send"
+              data-testid="chat-send"
+              className="grid size-8 place-items-center rounded-full bg-[#011627] text-white transition-opacity disabled:opacity-25"
+            >
+              <ArrowUp className="size-4" aria-hidden />
+            </button>
+          )}
         </div>
       </div>
       {note ? <p className="px-2 pt-2 text-center text-[12px] leading-4 text-[#8b8d98]">{note}</p> : null}

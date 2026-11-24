@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, Copy, Plus, X } from "lucide-react";
+import { ChevronRight, Copy, Plus } from "lucide-react";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { DenButton } from "../../(den)/_components/ui/button";
 import { COMPACT_INPUT_CLASS } from "../../(den)/_components/ui/dashboard-styles";
@@ -17,12 +17,12 @@ import { formatWorkbotCost } from "../../(den)/dashboard/_features/workbot-usage
 import {
   type Access,
   type Agent,
-  type Connector,
   type ConnectorId,
   type PaidBy,
   type Preset,
   type Routine,
   type Schedule,
+  type ToolSet,
   BUDGET_DOLLARS,
   CONNECTORS,
   DEFAULT_SCHEDULE,
@@ -30,6 +30,8 @@ import {
   ME,
   MEMBER,
   MODELS,
+  MY_COMPUTERS,
+  OPENWORK_AREAS,
   PRESET_LABEL,
   RHYTHMS,
   ROLE_LABEL,
@@ -44,7 +46,6 @@ import {
   initialsOf,
   isMine,
   isShared,
-  keptNotes,
   isWriteTool,
   keepRoutineState,
   listWords,
@@ -106,7 +107,7 @@ function Field({ label, htmlFor, children }: { label: string; htmlFor: string; c
 // An agent you can change: your own, or one you are a manager of
 // ---------------------------------------------------------------------------
 
-export function AgentSettings({ agent, access, connected, running, onPatch, onRemove, onLeave, onConnect, onOpenShare, onStopSharing, onRun, onRemoveNote }: {
+export function AgentSettings({ agent, access, connected, running, onPatch, onRemove, onLeave, onConnect, onOpenShare, onStopSharing, onRun }: {
   agent: Agent;
   access: Access;
   connected: Record<ConnectorId, boolean>;
@@ -118,7 +119,6 @@ export function AgentSettings({ agent, access, connected, running, onPatch, onRe
   onOpenShare: () => void;
   onStopSharing: () => void;
   onRun: (routineId: string) => void;
-  onRemoveNote: (noteId: string) => void;
 }) {
   const ids = { name: useId(), instructions: useId() };
   const [name, setName] = useState(agent.name);
@@ -134,7 +134,6 @@ export function AgentSettings({ agent, access, connected, running, onPatch, onRe
   const instructionsChanged = instructions.trim() !== agent.instructions.trim();
   const setUp = agent.instructions.trim().length > 0;
   const shared = isShared(agent.share, agent.owner);
-  const remembered = keptNotes(agent);
   const title = draft ? "Draft" : !setUp ? "Not set up yet" : !mine ? "Run its routines for me" : !agent.on ? "Paused" : over ? "Over budget" : "On";
   const sentence = draft
     ? "Only you can see it. Answer the cards in its thread, then turn it on."
@@ -180,29 +179,6 @@ export function AgentSettings({ agent, access, connected, running, onPatch, onRe
         </div>
       </ItemSection>
 
-      <ItemSection title="What it remembers" variant="rule" testId="agent-notes" meta={shared ? "For everyone who uses it" : undefined}>
-        <div className="flex flex-col divide-y divide-gray-100">
-          {remembered.length === 0 ? (
-            <p className="py-3 text-[13px] leading-5 text-gray-500">
-              {shared
-                ? "Nothing yet. Tell it something in its thread. It asks before it remembers that for everyone."
-                : "Nothing yet. Tell it something in its thread and it keeps that for every run after."}
-            </p>
-          ) : null}
-          {remembered.map((note) => (
-            <div key={note.id} className="flex min-h-10 items-center justify-between gap-3 py-2" data-testid="agent-note" data-by={note.by}>
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="text-[13px] leading-5 text-gray-900">{note.text}</span>
-                {shared ? <span className="text-[12px] leading-4 text-gray-500">{note.by === ME ? "Added by you" : `Added by ${personName(note.by)}`}</span> : null}
-              </span>
-              <button type="button" onClick={() => onRemoveNote(note.id)} aria-label={`Forget: ${note.text}`} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
-                <X className="h-3.5 w-3.5" aria-hidden />
-              </button>
-            </div>
-          ))}
-        </div>
-      </ItemSection>
-
       <RoutinesSection agent={agent} running={running} onPatch={onPatch} onRun={onRun} />
 
       <ItemSection title="What it can use" variant="rule" testId="agent-connectors" meta="Each tool is allowed or blocked">
@@ -221,20 +197,23 @@ export function AgentSettings({ agent, access, connected, running, onPatch, onRe
         </div>
       </ItemSection>
 
+      <OpenWorkSection agent={agent} onPatch={onPatch} />
+
       <ItemSection title="Where it reports" variant="rule" testId="agent-delivery">
         <div className="flex flex-col divide-y divide-gray-100">
-          <div className="flex min-h-[44px] items-center justify-between gap-3 py-2">
-            <span className="flex min-w-0 items-center gap-3">
-              <ConnectorLogo name="Slack" url="https://slack.com" size="xs" />
-              <span className="truncate text-[13px] font-medium text-gray-900">Direct message from Workbot</span>
-            </span>
-            <span className="shrink-0 text-[12px] text-gray-500">{shared ? "Each person gets their own" : "Only you see it"}</span>
-          </div>
+          <Row label="Its conversation in OpenWork">
+            <span className="text-[12px] text-gray-500">{shared ? "Each person has their own" : "Always"}</span>
+          </Row>
+          <Row label="Also message me in Slack">
+            <DenSwitch size="sm" aria-label="Also message me in Slack" checked={agent.alsoSlack} onChange={(alsoSlack) => onPatch({ alsoSlack })} />
+          </Row>
           <Row label="Stay quiet when nothing is new">
             <DenSwitch size="sm" aria-label="Stay quiet when nothing is new" checked={agent.quietWhenNothing} onChange={(quietWhenNothing) => onPatch({ quietWhenNothing })} />
           </Row>
         </div>
       </ItemSection>
+
+      <WhereSection agent={agent} access={access} onPatch={onPatch} />
 
       <SharingSection agent={agent} access={access} onOpenShare={onOpenShare} onStopSharing={onStopSharing} />
 
@@ -597,9 +576,58 @@ function HourSelect({ label, value, from, to, onChange }: { label: string; value
   );
 }
 
+// OpenWork's own tools, allowed or blocked like any app's. Sessions it starts keep its limits.
+function OpenWorkSection({ agent, onPatch }: { agent: Agent; onPatch: (patch: Partial<Agent>) => void }) {
+  return (
+    <ItemSection title="OpenWork" variant="rule" testId="agent-openwork" meta="Sessions it starts keep its limits">
+      <div className="flex flex-col divide-y divide-gray-100">
+        {OPENWORK_AREAS.map((area) => (
+          <ConnectorAccessRow
+            key={area.id}
+            connector={area}
+            logo={<img src="/openwork-mark.svg" alt="" className="h-5 w-5 shrink-0" />}
+            tools={agent.openwork[area.id]}
+            blocked={[]}
+            connected
+            onTools={(tools) => onPatch({ openwork: { ...agent.openwork, [area.id]: tools } })}
+            onConnect={() => undefined}
+          />
+        ))}
+      </div>
+    </ItemSection>
+  );
+}
+
+// Every run is a fresh session, in OpenWork Cloud or on one of your computers. A few run at once.
+function WhereSection({ agent, access, onPatch }: { agent: Agent; access: Access; onPatch: (patch: Partial<Agent>) => void }) {
+  const set = (cloud: boolean, computers: string[]) => {
+    if (!cloud && computers.length === 0) return;
+    onPatch({ runsOn: { cloud, computers } });
+  };
+  const only = (id: string) => agent.runsOn.computers.length + (agent.runsOn.cloud ? 1 : 0) === 1 && (id === "cloud" ? agent.runsOn.cloud : agent.runsOn.computers.includes(id));
+  return (
+    <ItemSection title="Where it works" variant="rule" testId="agent-where" meta={`Up to ${access.atOnce} at once`}>
+      <div className="flex flex-col divide-y divide-gray-100">
+        <Row label="OpenWork Cloud" note={<span className="text-[12px] leading-4 text-gray-500">Works while your computers are off.</span>}>
+          <DenSwitch size="sm" aria-label="OpenWork Cloud" checked={agent.runsOn.cloud} disabled={only("cloud")} onChange={(cloud) => set(cloud, agent.runsOn.computers)} />
+        </Row>
+        {MY_COMPUTERS.map((computer) => (
+          <Row key={computer.id} label={computer.name} testId={`agent-where-${computer.id}`}
+            note={access.cloudOnly ? <LockNote>Your admin allows OpenWork Cloud only.</LockNote> : <span className="text-[12px] leading-4 text-gray-500">{computer.online ? "Online" : "Offline. Its runs wait until it is back."}</span>}>
+            <DenSwitch size="sm" aria-label={computer.name} checked={!access.cloudOnly && agent.runsOn.computers.includes(computer.id)} disabled={access.cloudOnly || only(computer.id)}
+              onChange={(on) => set(agent.runsOn.cloud, on ? [...agent.runsOn.computers, computer.id] : agent.runsOn.computers.filter((id) => id !== computer.id))} />
+          </Row>
+        ))}
+        <div className="py-2.5"><LockNote>{`Your admin lets each agent work on ${access.atOnce} things at once. Another one waits for a free slot.`}</LockNote></div>
+      </div>
+    </ItemSection>
+  );
+}
+
 // A level is a shortcut. Underneath, every tool is either allowed or blocked.
-function ConnectorAccessRow({ connector, tools, blocked, connected, onTools, onConnect }: {
-  connector: Connector;
+function ConnectorAccessRow({ connector, logo, tools, blocked, connected, onTools, onConnect }: {
+  connector: ToolSet;
+  logo?: ReactNode;
   tools: string[];
   blocked: string[];
   connected: boolean;
@@ -674,7 +702,9 @@ function ConnectorAccessRow({ connector, tools, blocked, connected, onTools, onC
             );
           })}
           <p className="border-t border-gray-100 pt-2 text-[12px] leading-4 text-gray-500">
-            {`Never allowed for any agent: ${listWords(connector.neverTools.map((tool) => toolLabel(tool).toLowerCase()))}. ${connector.neverTools.length === 1 ? "It removes" : "They remove"} things for good.`}
+            {connector.id === "sessions"
+              ? `Never allowed for any agent: ${listWords(connector.neverTools.map((tool) => toolLabel(tool).toLowerCase()))}. Those stay yours.`
+              : `Never allowed for any agent: ${listWords(connector.neverTools.map((tool) => toolLabel(tool).toLowerCase()))}. ${connector.neverTools.length === 1 ? "It removes" : "They remove"} things for good.`}
           </p>
         </div>
       ) : null}
@@ -716,16 +746,6 @@ export function SharedAgentSettings({ agent, access, connected, atAgentLimit, on
       <ItemSection title="What it does" variant="rule" testId="agent-instructions">
         <div className="flex flex-col gap-2 py-3">
           <p className="whitespace-pre-line text-[13px] leading-5 text-gray-900" data-testid="agent-instructions-text">{agent.instructions}</p>
-          {keptNotes(agent).length > 0 ? (
-            <div className="flex flex-col gap-1" data-testid="agent-notes">
-              <p className="text-[12px] font-medium leading-4 text-gray-500">It also remembers</p>
-              <ul className="flex flex-col gap-1">
-                {keptNotes(agent).map((note) => (
-                  <li key={note.id} className="text-[13px] leading-5 text-gray-900" data-testid="agent-note">{note.text}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
           <LockNote>{`Shared by ${owner}. You are a collaborator: you can use it, and only ${ownerFirst} and the managers ${ownerFirst} picks can change it.`}</LockNote>
         </div>
       </ItemSection>

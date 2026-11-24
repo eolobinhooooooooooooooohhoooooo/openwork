@@ -66,6 +66,8 @@ export type ScriptedRun = {
   summary: string;
   blockedSummary?: string;
   steps: ScriptStep[];
+  // A tool it reaches for at the end without being allowed it, so it stops and asks.
+  wants?: { connector: ConnectorId; tool: string; action: string; done: string };
 };
 
 export type RunStep = {
@@ -74,6 +76,15 @@ export type RunStep = {
   label: string;
   tool: string;
   blocked?: BlockReason;
+};
+
+// Something a run wanted to do with a tool it isn't allowed. It asked, and this is how that ended.
+export type RunAsk = {
+  connector: ConnectorId;
+  tool: string;
+  // What it wanted to do, in a sentence: "Create the “Week of Nov 16” page in Notion".
+  action: string;
+  state: "allowed" | "always" | "denied" | "expired";
 };
 
 export type AgentRun = {
@@ -88,11 +99,53 @@ export type AgentRun = {
   asked?: string;
   // The routine this run was for. Unset when it was run by hand or asked a question.
   routine?: string;
+  // Set when the person stopped it before it finished.
+  stopped?: boolean;
+  // A message the person sent while it worked. It read that first and went by it.
+  heard?: string;
+  // A tool it asked to use partway through, and the answer.
+  wanted?: RunAsk;
 };
+
+// The colour of an agent's round avatar. Each agent is a named character with one job.
+export type AgentColor = "red" | "orange" | "green" | "teal" | "blue" | "violet" | "pink" | "slate";
+export const AGENT_COLORS: { id: AgentColor; fill: string }[] = [
+  { id: "red", fill: "#e5484d" },
+  { id: "orange", fill: "#f76b15" },
+  { id: "green", fill: "#30a46c" },
+  { id: "teal", fill: "#12a594" },
+  { id: "blue", fill: "#0090ff" },
+  { id: "violet", fill: "#6e56cf" },
+  { id: "pink", fill: "#d6409f" },
+  { id: "slate", fill: "#60646c" },
+];
+
+// OpenWork's own tools, which an agent can be allowed like any app.
+export type OpenWorkArea = "sessions" | "skills" | "automations" | "artifacts";
+
+// Where an agent's sessions may run: OpenWork Cloud, and any of the member's own computers.
+export type RunsOn = { cloud: boolean; computers: string[] };
+export const MY_COMPUTERS: { id: string; name: string; online: boolean }[] = [
+  { id: "laptop", name: "This MacBook", online: true },
+  { id: "studio", name: "Office Mac mini", online: false },
+];
+
+// A reply in a thread: a follow-up about one result. It never changes the agent.
+// When a reply in a thread asks for a lasting change, the agent offers to take it to the conversation instead.
+export type ThreadReply = { id: string; runId: string; from: PersonId | "agent"; text: string; move?: { text: string; done: boolean } };
 
 export type Agent = {
   id: string;
   name: string;
+  color: AgentColor;
+  // Its OpenWork tools, by area. Anything not listed is blocked.
+  openwork: Record<OpenWorkArea, string[]>;
+  runsOn: RunsOn;
+  // Also send results to the person's Slack, besides its conversation here.
+  alsoSlack: boolean;
+  replies: ThreadReply[];
+  // Where in the conversation someone asked "What do you remember?", by how many runs came before.
+  memoryChecks: number[];
   instructions: string;
   on: boolean;
   routines: Routine[];
@@ -151,7 +204,73 @@ export type Access = {
   orgBudget: { offered: boolean; monthlyMicro: number };
   // Whether members may share their agents with other people.
   sharing: boolean;
+  // How many sessions one agent may work on at once. One more waits for a free slot.
+  atOnce: number;
+  // Agents may only run in OpenWork Cloud, never on members' own computers.
+  cloudOnly: boolean;
 };
+
+// One piece of work an agent is doing now. Every run is a fresh session.
+export type SessionState = "working" | "waiting" | "needs_you";
+export type AgentSession = {
+  id: string;
+  agentId: string;
+  // "ask" is a message in its conversation. The others are background work that reports back there.
+  kind: "ask" | "routine" | "run";
+  label: string;
+  routineId?: string;
+  asked?: string;
+  state: SessionState;
+  // Steps shown so far, out of the run worked out when it started.
+  shown: number;
+  run: AgentRun;
+  // Set while it waits for an OK to use a tool it isn't allowed. Raised in the background, it expires after 30 minutes.
+  ask: (Omit<RunAsk, "state"> & { raisedMs: number; background: boolean }) | null;
+  heard: string[];
+};
+
+export const ASK_EXPIRES_MS = 30 * 60 * 1000;
+
+export type ToolSet = Pick<Connector, "name" | "url" | "readLine" | "writeLine" | "readTools" | "writeTools" | "neverTools"> & { id: string };
+
+export const OPENWORK_AREAS: (ToolSet & { id: OpenWorkArea })[] = [
+  {
+    id: "sessions", name: "Sessions", url: "",
+    readLine: "Reads your sessions.",
+    writeLine: "Reads your sessions, starts new ones and sends to them.",
+    readTools: ["list_sessions", "read_session"],
+    writeTools: ["start_session", "send_to_session"],
+    neverTools: ["answer_remote_session", "attach_remote_session"],
+  },
+  {
+    id: "skills", name: "Skills", url: "",
+    readLine: "Reads your skills.",
+    writeLine: "Reads, creates and changes your skills.",
+    readTools: ["list_skills", "read_skill"],
+    writeTools: ["create_skill", "update_skill"],
+    neverTools: ["delete_skill"],
+  },
+  {
+    id: "automations", name: "Automations", url: "",
+    readLine: "Reads your automations and their runs.",
+    writeLine: "Reads your automations, proposes new ones and changes them.",
+    readTools: ["list_automations", "read_automation"],
+    writeTools: ["propose_automation", "update_automation"],
+    neverTools: ["archive_automation"],
+  },
+  {
+    id: "artifacts", name: "Artifacts", url: "",
+    readLine: "Reads your artifacts.",
+    writeLine: "Reads, creates and changes your artifacts.",
+    readTools: ["list_artifacts", "read_artifact"],
+    writeTools: ["create_artifact", "update_artifact"],
+    neverTools: ["delete_artifact"],
+  },
+];
+
+export function noOpenWork(): Record<OpenWorkArea, string[]> {
+  return { sessions: [], skills: [], automations: [], artifacts: [] };
+}
 
 export const PRESET_LABEL: Record<Preset, string> = { none: "Off", read: "Read only", write: "Read and write", custom: "Custom" };
 export const TIMEZONE = "America/Los_Angeles";
@@ -306,6 +425,8 @@ export const DEFAULT_ACCESS: Access = {
   maxAgents: 5,
   orgBudget: { offered: true, monthlyMicro: 200 * DOLLAR },
   sharing: true,
+  atOnce: 3,
+  cloudOnly: false,
 };
 
 export const DEFAULT_CONNECTED: Record<ConnectorId, boolean> = { slack: true, linear: true, github: true, notion: true, gmail: true, calendar: false };
@@ -333,7 +454,42 @@ export function delivered(key: string): RunStep {
   return { key, connector: "workbot", label: "Sent you a direct message in Slack", tool: "deliver" };
 }
 
+// What every agent has that the samples below don't spell out.
+type AgentBase = Omit<Agent, "color" | "openwork" | "runsOn" | "alsoSlack" | "replies" | "memoryChecks">;
+const SAMPLE_EXTRAS: Record<string, Partial<Agent>> = {
+  "agent-triage": {
+    color: "blue",
+    alsoSlack: true,
+    openwork: { ...noOpenWork(), sessions: ["list_sessions", "read_session"] },
+    replies: [
+      { id: "reply-1", runId: "triage-1", from: "dana", text: "Which release issue is blocked?" },
+      { id: "reply-2", runId: "triage-1", from: "agent", text: "The export timeout in Linear. It has waited on a review since Friday, and two people are assigned." },
+    ],
+  },
+  "agent-notes": { color: "violet" },
+  "agent-inbox": { color: "orange" },
+  "agent-churn": { color: "red" },
+};
+const SAMPLE_COLORS: AgentColor[] = ["teal", "green", "pink", "slate"];
+
+function finishAgent(base: AgentBase, index: number): Agent {
+  return {
+    color: SAMPLE_COLORS[index % SAMPLE_COLORS.length] ?? "slate",
+    openwork: noOpenWork(),
+    runsOn: { cloud: true, computers: [] },
+    alsoSlack: false,
+    replies: [],
+    memoryChecks: [],
+    ...base,
+    ...SAMPLE_EXTRAS[base.id],
+  };
+}
+
 export function sampleAgents(): Agent[] {
+  return sampleBases().map(finishAgent);
+}
+
+function sampleBases(): AgentBase[] {
   return [
     {
       id: "agent-triage",
@@ -488,7 +644,16 @@ export function sampleAgents(): Agent[] {
           steps: [{ key: "a", connector: "gmail", label: "Read 31 threads in your inbox", tool: "search_threads" }, delivered("b")],
         },
         {
-          id: "inbox-3", routine: "Inbox sweep", when: "Fri 3:00 PM", today: false, outcome: "quiet", costMicro: 74_000,
+          id: "inbox-x", routine: "Inbox sweep", when: "Fri 3:00 PM", today: false, outcome: "sent", costMicro: 96_000,
+          summary: "1 customer reply has waited more than a day: a question about renewing their plan.",
+          wanted: { connector: "gmail", tool: "create_draft", action: "Use “Create draft” in Gmail", state: "expired" },
+          steps: [
+            { key: "a", connector: "gmail", label: "Read 26 threads in your inbox", tool: "search_threads" },
+            { key: "b", connector: "gmail", label: "Didn't draft a reply", tool: "create_draft", blocked: "Not allowed" },
+          ],
+        },
+        {
+          id: "inbox-3", routine: "Inbox sweep", when: "Fri 1:00 PM", today: false, outcome: "quiet", costMicro: 74_000,
           summary: "No one has waited more than a day.",
           steps: [{ key: "a", connector: "gmail", label: "Read 28 threads in your inbox", tool: "search_threads" }],
         },
@@ -646,7 +811,7 @@ export function modelById(id: ModelId) {
   return MODELS.find((model) => model.id === id) ?? MODELS[0];
 }
 
-export function toolsForLevel(connector: Connector, level: Level): string[] {
+export function toolsForLevel(connector: ToolSet, level: Level): string[] {
   if (level === "none") return [];
   return level === "read" ? [...connector.readTools] : [...connector.readTools, ...connector.writeTools];
 }
@@ -655,7 +820,7 @@ export function readOnly(id: ConnectorId): string[] {
   return toolsForLevel(connectorById(id), "read");
 }
 
-export function presetOf(connector: Connector, tools: string[]): Preset {
+export function presetOf(connector: ToolSet, tools: string[]): Preset {
   if (tools.length === 0) return "none";
   const same = (level: Level) => {
     const wanted = toolsForLevel(connector, level);
@@ -664,7 +829,7 @@ export function presetOf(connector: Connector, tools: string[]): Preset {
   return same("read") ? "read" : same("write") ? "write" : "custom";
 }
 
-export function isWriteTool(connector: Connector, tool: string): boolean {
+export function isWriteTool(connector: ToolSet, tool: string): boolean {
   return connector.writeTools.includes(tool);
 }
 
@@ -700,7 +865,7 @@ export function blocksForLevel(connector: Connector, level: Level): string[] {
   return level === "read" ? [...connector.writeTools] : toolsForLevel(connector, "write");
 }
 
-export function toolsLine(connector: Connector, tools: string[]): string {
+export function toolsLine(connector: ToolSet, tools: string[]): string {
   const preset = presetOf(connector, tools);
   if (preset === "none") return "Not used.";
   if (preset === "read") return connector.readLine;
@@ -708,7 +873,7 @@ export function toolsLine(connector: Connector, tools: string[]): string {
   return `${tools.length} of ${toolsForLevel(connector, "write").length} tools: ${listWords(tools.map((tool) => lowerFirst(toolLabel(tool))))}.`;
 }
 
-export function toolCount(connector: Connector, tools: string[]): string {
+export function toolCount(connector: ToolSet, tools: string[]): string {
   return `${tools.length} of ${toolsForLevel(connector, "write").length} tools`;
 }
 
@@ -881,7 +1046,7 @@ function actOut(agent: Agent, access: Access, connected: Record<ConnectorId, boo
     outcome: tellsYou ? "sent" : "quiet",
     summary,
     costMicro: cost,
-    steps: tellsYou ? [...steps, delivered(`${base.id}-dm`)] : steps,
+    steps: tellsYou && agent.alsoSlack ? [...steps, delivered(`${base.id}-dm`)] : steps,
   };
 }
 
@@ -912,6 +1077,90 @@ export function askAgent(agent: Agent, access: Access, connected: Record<Connect
   }
   const run = actOut(agent, access, connected, scripted, base);
   return { ...run, outcome: run.outcome === "quiet" ? "sent" : run.outcome, steps: run.steps.filter((step) => step.connector !== "workbot") };
+}
+
+// A fresh session for one piece of work. The run is worked out up front and shown step by step.
+// If a step needs a tool the agent isn't allowed (and the admin doesn't block), it stops there and asks.
+export function startSession(agent: Agent, access: Access, connected: Record<ConnectorId, boolean>, input: {
+  id: string;
+  when: string;
+  kind: AgentSession["kind"];
+  routine?: Routine;
+  asked?: string;
+  nowMs: number;
+  working: boolean;
+}): AgentSession {
+  const run = input.kind === "ask" && input.asked
+    ? askAgent(agent, access, connected, input.asked, input.when, input.id)
+    : simulateRun(agent, access, connected, input.when, input.id, input.routine);
+  const wanted = run.steps.find((step) => step.blocked === "Not allowed" && step.connector !== "workbot" && isWriteTool(connectorById(step.connector), step.tool));
+  const connector = wanted && wanted.connector !== "workbot" ? wanted.connector : null;
+  return {
+    id: input.id,
+    agentId: agent.id,
+    kind: input.kind,
+    label: input.kind === "ask" ? "Your message" : input.routine?.name ?? "Run now",
+    routineId: input.routine?.id,
+    asked: input.asked,
+    state: input.working ? "working" : "waiting",
+    shown: 0,
+    run,
+    ask: wanted && connector
+      ? { connector, tool: wanted.tool, action: `Use “${toolLabel(wanted.tool)}” in ${connectorById(connector).name}`, raisedMs: input.nowMs, background: input.kind !== "ask" }
+      : null,
+    heard: [],
+  };
+}
+
+// The step it would have taken, had it been allowed.
+function doneLabel(agent: Agent, tool: string): string | null {
+  for (const scripted of agent.script) {
+    const step = scripted.steps.find((entry) => entry.tool === tool);
+    if (step) return step.label;
+  }
+  return null;
+}
+
+// How a session's run ends: as worked out, or changed by the answer to what it asked.
+export function settleRun(agent: Agent, session: AgentSession, answer: RunAsk["state"] | null): AgentRun {
+  const { run, ask } = session;
+  const heard = session.heard[session.heard.length - 1];
+  const base = heard ? { ...run, heard } : run;
+  if (!ask || answer === null) return base;
+  const wanted: RunAsk = { connector: ask.connector, tool: ask.tool, action: ask.action, state: answer };
+  if (answer === "allowed" || answer === "always") {
+    const label = doneLabel(agent, ask.tool) ?? ask.action;
+    const scripted = agent.script.find((entry) => entry.steps.some((step) => step.tool === ask.tool));
+    return {
+      ...base,
+      wanted,
+      summary: scripted?.summary ?? run.summary,
+      steps: run.steps.map((step) => (step.tool === ask.tool ? { key: step.key, connector: step.connector, label, tool: step.tool } : step)),
+    };
+  }
+  return { ...base, wanted };
+}
+
+// A stopped session keeps what it already did, and nothing after.
+export function stoppedRun(session: AgentSession): AgentRun {
+  return {
+    ...session.run,
+    stopped: true,
+    outcome: "quiet",
+    summary: "Stopped. What it already did stays done; nothing after that ran.",
+    costMicro: Math.round(session.run.costMicro * Math.min(1, session.shown / Math.max(1, session.run.steps.length))),
+    steps: session.run.steps.slice(0, session.shown),
+  };
+}
+
+// The answer to "What do you remember?" is what it keeps in mind on every run.
+export function isMemoryQuestion(text: string): boolean {
+  return /what (do|did) you remember|what do you know about me/i.test(text);
+}
+
+// A thread is about one result. Changing the agent itself happens in its conversation.
+export function changesTheAgent(text: string): boolean {
+  return /\b(remember|from now on|always|never|stop doing|don't|do not|every time|change (your|the) routine|new routine|new skill)\b/i.test(text);
 }
 
 export function applyRun(agent: Agent, run: AgentRun): Agent {
@@ -1056,6 +1305,12 @@ export function newAgent(id: string, access: Access): Agent {
     runs: [],
     script: [],
     madeIn: "page",
+    color: "blue",
+    openwork: noOpenWork(),
+    runsOn: { cloud: true, computers: [] },
+    alsoSlack: false,
+    replies: [],
+    memoryChecks: [],
     owner: ME,
     share: NOT_SHARED,
     managers: [],
@@ -1082,7 +1337,7 @@ export function copyAgent(agent: Agent, id: string, access: Access): Agent {
 // An agent's own thread: every run is a turn, and what you reply is remembered.
 // ---------------------------------------------------------------------------
 
-export type ThreadItem = { kind: "run"; key: string; run: AgentRun } | { kind: "note"; key: string; note: AgentNote };
+export type ThreadItem = { kind: "run"; key: string; run: AgentRun } | { kind: "note"; key: string; note: AgentNote } | { kind: "memory"; key: string };
 
 // What the agent keeps in mind on every run.
 export function keptNotes(agent: Agent): AgentNote[] {
@@ -1108,11 +1363,17 @@ export function agentThread(agent: Agent): ThreadItem[] {
   const oldestFirst = [...agent.runs].reverse();
   const items: ThreadItem[] = [];
   const notesAt = (count: number) => agent.notes.filter((note) => note.by === ME && Math.min(note.afterRuns, oldestFirst.length) === count);
+  const said = (count: number) => {
+    for (const note of notesAt(count)) items.push({ kind: "note", key: note.id, note });
+    agent.memoryChecks.forEach((at, index) => {
+      if (Math.min(at, oldestFirst.length) === count) items.push({ kind: "memory", key: `memory-${index}` });
+    });
+  };
   oldestFirst.forEach((run, index) => {
-    for (const note of notesAt(index)) items.push({ kind: "note", key: note.id, note });
+    said(index);
     items.push({ kind: "run", key: run.id, run });
   });
-  for (const note of notesAt(oldestFirst.length)) items.push({ kind: "note", key: note.id, note });
+  said(oldestFirst.length);
   return items;
 }
 

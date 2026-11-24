@@ -1,16 +1,19 @@
 "use client";
 
-import { CircleDollarSign, Plug, Power, Repeat, SlidersHorizontal } from "lucide-react";
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { CircleDollarSign, Plug, Power, Repeat } from "lucide-react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ConnectorLogo } from "../../(den)/dashboard/_components/item-logo";
 import { formatWorkbotCost } from "../../(den)/dashboard/_features/workbot-usage/workbot-usage-data";
-import { AppButton, CardDetails, CardRow, CardShell, Composer, PaneHeader, ToolList, accessWord } from "./app-parts";
+import { AppButton, CardDetails, CardRow, CardShell, Composer, ToolList, accessWord } from "./app-parts";
+import { AgentAvatar } from "./conversation";
 import {
   type Access,
   type Agent,
+  type AgentColor,
   type AgentSetup,
   type ConnectorId,
   type SetupStepId,
+  AGENT_COLORS,
   CONNECTORS,
   JOB_EXAMPLES,
   SETUP_STEPS,
@@ -39,32 +42,35 @@ export function NewAgentDialog({ taken, atLimit, maxAgents, onCreate, onClose }:
   taken: string[];
   atLimit: boolean;
   maxAgents: number;
-  onCreate: (name: string) => void;
+  onCreate: (name: string, color: AgentColor) => void;
   onClose: () => void;
 }) {
   const id = useId();
   const [name, setName] = useState("");
+  const [color, setColor] = useState<AgentColor>(AGENT_COLORS[(taken.length + 4) % AGENT_COLORS.length]?.id ?? "blue");
   const trimmed = name.trim();
   const clash = taken.some((entry) => entry.toLowerCase() === trimmed.toLowerCase());
   const ready = trimmed.length > 0 && !clash && !atLimit;
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (ready) onCreate(trimmed);
+    if (ready) onCreate(trimmed, color);
   };
   return (
     <Dialog
       title="New agent"
-      description="Give it a name. You tell it what to do next, in its own thread."
       onClose={onClose}
       testId="new-agent-dialog"
       footer={(
         <>
           <AppButton variant="quiet" onClick={onClose} testId="new-agent-cancel">Cancel</AppButton>
-          <AppButton disabled={!ready} onClick={() => onCreate(trimmed)} testId="new-agent-create">Create</AppButton>
+          <AppButton disabled={!ready} onClick={() => onCreate(trimmed, color)} testId="new-agent-create">Create</AppButton>
         </>
       )}
     >
       <form onSubmit={submit} className="flex flex-col gap-1.5">
+        <div className="flex justify-center pb-3">
+          <AgentAvatar agent={{ name: trimmed || "?", color }} size={56} />
+        </div>
         <label htmlFor={id} className="text-[13px] font-medium text-[#1c2024]">Name</label>
         <input
           id={id}
@@ -80,23 +86,37 @@ export function NewAgentDialog({ taken, atLimit, maxAgents, onCreate, onClose }:
         <p className="text-[12px] leading-4 text-[#8b8d98]" role="status" data-testid="new-agent-note">
           {atLimit
             ? `Your admin allows ${maxAgents} agents. Remove one to make another.`
-            : clash ? "You already have an agent with that name." : "It starts as a draft only you can see."}
+            : clash ? "You already have an agent with that name." : "One agent per job. Its first message from you is that job."}
         </p>
+        <div className="flex flex-wrap gap-2 pt-2" role="radiogroup" aria-label="Colour">
+          {AGENT_COLORS.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              role="radio"
+              aria-checked={color === entry.id}
+              aria-label={entry.id}
+              onClick={() => setColor(entry.id)}
+              data-testid={`new-agent-color-${entry.id}`}
+              className={`size-6 rounded-full transition-shadow ${color === entry.id ? "ring-2 ring-[#1c2024] ring-offset-2" : ""}`}
+              style={{ backgroundColor: entry.fill }}
+            />
+          ))}
+        </div>
       </form>
     </Dialog>
   );
 }
 
-export function DraftThread({ agent, setup, access, connected, settingsOpen, onJob, onSetup, onTurnOn, onSettings }: {
+export function DraftThread({ agent, setup, access, connected, header, onJob, onSetup, onTurnOn }: {
   agent: Agent;
   setup: AgentSetup;
   access: Access;
   connected: Record<ConnectorId, boolean>;
-  settingsOpen: boolean;
+  header: ReactNode;
   onJob: (text: string) => void;
   onSetup: (step: SetupStepId, answer: "done" | "skipped", patch?: Partial<Agent>) => void;
   onTurnOn: () => void;
-  onSettings: () => void;
 }) {
   const [text, setText] = useState("");
   const hasJob = agent.instructions.trim().length > 0;
@@ -118,9 +138,7 @@ export function DraftThread({ agent, setup, access, connected, settingsOpen, onJ
 
   return (
     <>
-      <PaneHeader title={agent.name} sub="Draft · Only you can see it">
-        <AppButton variant={settingsOpen ? "secondary" : "quiet"} icon={SlidersHorizontal} pressed={settingsOpen} onClick={onSettings} testId="thread-settings">Settings</AppButton>
-      </PaneHeader>
+      {header}
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto" data-testid="draft-thread" data-agent={agent.id} data-step={hasJob ? current ?? "turn-on" : "job"}>
         {hasJob ? (
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-5 py-6">
@@ -145,10 +163,10 @@ export function DraftThread({ agent, setup, access, connected, settingsOpen, onJ
           </div>
         ) : (
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-5 py-10" data-testid="draft-empty">
-            <div className="flex flex-col gap-1.5">
-              <h2 className="text-[20px] font-semibold leading-7 tracking-[-0.2px] text-[#1c2024]">{`What should ${agent.name} do?`}</h2>
-              <p className="max-w-[560px] text-[14px] leading-6 text-[#60646c]">
-                Say what it should look at and how often. It then asks which tools it may use, when it works and who pays, before anything runs.
+            <div className="flex gap-2.5">
+              <span className="pt-0.5"><AgentAvatar agent={agent} size={24} /></span>
+              <p className="max-w-[560px] rounded-2xl bg-[#f0f0f3] px-4 py-2.5 text-[14px] leading-6 text-[#1c2024]">
+                {`Hi, I'm ${agent.name}. What's my job? Say what I should look at and how often. I'll ask which tools I may use, when I work and who pays before anything runs.`}
               </p>
             </div>
             <div className="flex flex-col items-start gap-2">
@@ -363,7 +381,7 @@ function TurnOnCard({ agent, access, onTurnOn }: { agent: Agent; access: Access;
             : "None. It works only when you ask it."}
         </CardRow>
         <CardRow label="Budget">{budgetSentence(agent, access)}</CardRow>
-        <CardRow label="Reports">A direct message from Workbot in Slack, and here in its thread.</CardRow>
+        <CardRow label="Reports">Here in its conversation. You can also have it message you in Slack.</CardRow>
         <CardRow label="Shared with">Nobody. Use Share once it is on.</CardRow>
       </div>
     </CardShell>

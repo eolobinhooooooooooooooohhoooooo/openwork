@@ -597,6 +597,21 @@ function AdminAccess({ access, onChange }: { access: Access; onChange: (access: 
               </DenSelect>
             </div>
           </Row>
+          <Row label="Runs at once for each agent">
+            <div className="w-48">
+              <DenSelect size="sm" aria-label="Runs at once for each agent" menuWidth="trigger" value={String(access.atOnce)} onChange={(event) => onChange({ ...access, atOnce: Number(event.target.value) })}>
+                {[1, 2, 3, 5].map((count) => <option key={count} value={String(count)}>{`${count} at once`}</option>)}
+              </DenSelect>
+            </div>
+          </Row>
+          <Row label="Where agents work">
+            <div className="w-48">
+              <DenSelect size="sm" aria-label="Where agents work" menuWidth="trigger" value={access.cloudOnly ? "cloud" : "any"} onChange={(event) => onChange({ ...access, cloudOnly: event.target.value === "cloud" })}>
+                <option value="any">Cloud or computers</option>
+                <option value="cloud">Cloud only</option>
+              </DenSelect>
+            </div>
+          </Row>
         </div>
       </ItemSection>
     </div>
