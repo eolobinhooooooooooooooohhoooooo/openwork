@@ -33,7 +33,6 @@ import {
 import {
   type Access,
   type Agent,
-  type AgentColor,
   type AgentRun,
   type AgentSession,
   type ChatCard,
@@ -41,7 +40,7 @@ import {
   type ChatTurn,
   type ConnectorId,
   type RunAsk,
-  type SetupStepId,
+  type Schedule,
   CHAT_EXTRAS,
   MEMBER,
   NOT_SHARED,
@@ -73,14 +72,14 @@ import {
 } from "./model";
 import { Dialog } from "./parts";
 import { AgentSettings, MonthSpend, SharedAgentSettings } from "./settings";
-import { DraftThread, NewAgentDialog } from "./setup";
+import { NewAgentChat } from "./setup";
 import { BrowseDialog, ShareDialog } from "./share";
 
 // ---------------------------------------------------------------------------
 // The OpenWork desktop app, built on one idea from Grok Bot: each agent is a
-// named character with one job and one conversation. Routines report back in
-// that conversation, each run is a thread, and the agent's details and
-// settings open beside it from its name.
+// named character with one job and one conversation. A new agent starts as a
+// chat: say its job and it is working. It asks for a tool the first time it
+// needs it. Its details are a glance beside the chat; settings are one step in.
 // ---------------------------------------------------------------------------
 
 export type DesktopView =
@@ -117,10 +116,11 @@ export type DesktopAppProps = {
   onCopy: (agent: Agent) => void;
   onShare: (agentId: string, share: AccessDraft, managers: string[]) => void;
   onConnect: (id: ConnectorId) => void;
-  // A new agent starts as a named draft. Its first message is its job, then a few cards finish it.
-  onCreate: (name: string, color: AgentColor) => void;
+  // A new agent starts as an empty chat. Its first message is its job; one answer starts it.
+  onCreate: () => void;
   onJob: (agentId: string, text: string) => void;
-  onSetup: (agentId: string, step: SetupStepId, answer: "done" | "skipped", patch?: Partial<Agent>) => void;
+  onAskOften: (agentId: string, asking: "start" | "often") => void;
+  onStart: (agentId: string, schedule?: Schedule) => void;
 };
 
 const APP_FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
@@ -131,9 +131,9 @@ type Mark = "needs_you" | "working" | "unread" | null;
 export function DesktopApp(props: DesktopAppProps) {
   const {
     view, onView, agents, access, connected, turns, unreadIds, sessions, nowMs, onAsk, onCard, onSend, onRun, onStop, onAnswerAsk, onAnswerNote,
-    onRemoveNote, onReply, onMoveReply, onPatch, removed, onRemove, onUndoRemove, onCopy, onShare, onConnect, onCreate, onJob, onSetup,
+    onRemoveNote, onReply, onMoveReply, onPatch, removed, onRemove, onUndoRemove, onCopy, onShare, onConnect, onCreate, onJob, onAskOften, onStart,
   } = props;
-  const [dialog, setDialog] = useState<"new" | "browse" | "usage" | null>(null);
+  const [dialog, setDialog] = useState<"browse" | "usage" | null>(null);
   const found = view.kind === "agent" ? agents.find((agent) => agent.id === view.agentId) ?? null : null;
   const agent = found && canSee(found, access) ? found : null;
   const listed = agents.filter((entry) => inMyList(entry, access));
@@ -193,13 +193,8 @@ export function DesktopApp(props: DesktopAppProps) {
     )
   ) : null;
 
-  const sub = agent
-    ? agent.setup
-      ? "Draft · only you can see it"
-      : isMine(agent)
-        ? undefined
-        : `From ${firstNameOf(agent.owner)} · ${ROLE_LABEL[roleOf(agent) ?? "collaborator"]}`
-    : undefined;
+  const sub = agent && !isMine(agent) ? `From ${firstNameOf(agent.owner)} · ${ROLE_LABEL[roleOf(agent) ?? "collaborator"]}` : undefined;
+  const sharedToAdd = agents.filter((entry) => !isMine(entry) && canSee(entry, access) && !entry.added).length;
 
   const header = agent ? (
     <ConversationHeader
@@ -220,7 +215,10 @@ export function DesktopApp(props: DesktopAppProps) {
         markOf={markOf}
         onChat={() => onView({ kind: "chat" })}
         onAgent={openAgent}
-        onNew={() => setDialog("new")}
+        onNew={onCreate}
+        canAdd={!atAgentLimit}
+        maxAgents={access.maxAgents}
+        sharedToAdd={sharedToAdd}
         onBrowse={() => setDialog("browse")}
         onUsage={() => setDialog("usage")}
       />
@@ -243,16 +241,14 @@ export function DesktopApp(props: DesktopAppProps) {
               {/* Wide windows show the conversation and its side panel together. Narrow ones show one at a time. */}
               <div className={`min-w-0 flex-1 flex-col ${side ? "hidden lg:flex" : "flex"}`}>
                 {agent.setup ? (
-                  <DraftThread
+                  <NewAgentChat
                     key={agent.id}
                     agent={agent}
                     setup={agent.setup}
-                    access={access}
-                    connected={connected}
                     header={header}
                     onJob={(text) => onJob(agent.id, text)}
-                    onSetup={(step, answer, patch) => onSetup(agent.id, step, answer, patch)}
-                    onTurnOn={() => onPatch(agent.id, { on: true, setup: null })}
+                    onAskOften={(asking) => onAskOften(agent.id, asking)}
+                    onStart={(schedule) => onStart(agent.id, schedule)}
                   />
                 ) : (
                   <AgentConversation
@@ -269,7 +265,6 @@ export function DesktopApp(props: DesktopAppProps) {
                     onForget={(noteId) => onRemoveNote(agent.id, noteId)}
                     onOpenThread={(id) => go({ thread: id })}
                     onTurnOn={() => onPatch(agent.id, { on: true })}
-                    onRun={() => onRun(agent.id)}
                   />
                 )}
               </div>
@@ -297,7 +292,7 @@ export function DesktopApp(props: DesktopAppProps) {
                   onTab={(tab) => go({ panel: tab })}
                   onClose={() => go({ panel: null })}
                   onToggle={(on) => onPatch(agent.id, { on })}
-                  onRoutine={(routineId, on) => onPatch(agent.id, { routines: agent.routines.map((routine) => (routine.id === routineId ? { ...routine, on } : routine)) })}
+                  onRename={(name) => onPatch(agent.id, { name })}
                   onRun={() => onRun(agent.id)}
                   onOpenThread={(id) => go({ thread: id })}
                   settings={settings}
@@ -314,18 +309,6 @@ export function DesktopApp(props: DesktopAppProps) {
         </div>
       </main>
 
-      {dialog === "new" ? (
-        <NewAgentDialog
-          taken={agents.filter(isMine).map((entry) => entry.name)}
-          atLimit={atAgentLimit}
-          maxAgents={access.maxAgents}
-          onCreate={(name, color) => {
-            setDialog(null);
-            onCreate(name, color);
-          }}
-          onClose={() => setDialog(null)}
-        />
-      ) : null}
       {dialog === "browse" ? (
         <BrowseDialog
           agents={agents}
@@ -369,16 +352,21 @@ function MarkDot({ mark, ring = false }: { mark: Mark; ring?: boolean }) {
   );
 }
 
-function Sidebar({ view, listed, markOf, onChat, onAgent, onNew, onBrowse, onUsage }: {
+function Sidebar({ view, listed, markOf, onChat, onAgent, onNew, canAdd, maxAgents, sharedToAdd, onBrowse, onUsage }: {
   view: DesktopView;
   listed: Agent[];
   markOf: (agent: Agent) => Mark;
   onChat: () => void;
   onAgent: (agentId: string) => void;
   onNew: () => void;
+  canAdd: boolean;
+  maxAgents: number;
+  // Agents teammates shared that aren't in the list yet.
+  sharedToAdd: number;
   onBrowse: () => void;
   onUsage: () => void;
 }) {
+  const plus = (rail: boolean) => <AgentsPlus onNew={onNew} canAdd={canAdd} maxAgents={maxAgents} rail={rail} />;
   const selectedId = view.kind === "agent" ? view.agentId : null;
   return (
     <aside className="flex w-[60px] shrink-0 flex-col xl:w-[248px]" aria-label="OpenWork sidebar">
@@ -412,14 +400,28 @@ function Sidebar({ view, listed, markOf, onChat, onAgent, onNew, onBrowse, onUsa
         </button>
         <div className="flex flex-col items-center gap-1 xl:items-stretch xl:gap-0.5" data-testid="desktop-agent-threads">
           <div className="hidden xl:block">
-            <GroupLabel action={<AgentsPlus onNew={onNew} onBrowse={onBrowse} />}>Agents</GroupLabel>
+            <GroupLabel action={plus(false)}>Agents</GroupLabel>
           </div>
           <span className="my-1 h-px w-6 bg-[#e0e1e6] xl:hidden" aria-hidden />
           {listed.map((agent) => (
             <AgentRow key={agent.id} agent={agent} mark={markOf(agent)} selected={selectedId === agent.id} onClick={() => onAgent(agent.id)} />
           ))}
-          <div className="xl:hidden"><AgentsPlus onNew={onNew} onBrowse={onBrowse} rail /></div>
+          <div className="xl:hidden">{plus(true)}</div>
           {listed.length === 0 ? <p className="hidden px-2.5 py-1.5 text-[12px] leading-4 text-[#8b8d98] xl:block">One agent per job. Start one from the +.</p> : null}
+          {sharedToAdd > 0 ? (
+            <button
+              type="button"
+              onClick={onBrowse}
+              title="Shared with you"
+              aria-label={`Shared with you, ${sharedToAdd}`}
+              data-testid="desktop-browse-shared"
+              className="flex size-10 items-center justify-center gap-2 rounded-xl text-left text-[13px] text-[#8b8d98] transition-colors hover:bg-[#f0f0f3] hover:text-[#1c2024] xl:h-8 xl:w-full xl:justify-start xl:rounded-md xl:px-2"
+            >
+              <span className="grid size-6 shrink-0 place-items-center"><Users className="size-4" aria-hidden /></span>
+              <span className="hidden min-w-0 flex-1 truncate xl:inline">Shared with you</span>
+              <span className="hidden text-[11px] xl:inline">{sharedToAdd}</span>
+            </button>
+          ) : null}
         </div>
       </div>
       <ProfileMenu onUsage={onUsage} />
@@ -467,7 +469,7 @@ function SessionRow({ label, selected = false, onClick, testId }: { label: strin
 
 // An agent in the roster: its face, its name, and whether it needs you, is working, or has something new.
 function AgentRow({ agent, mark, selected, onClick }: { agent: Agent; mark: Mark; selected: boolean; onClick: () => void }) {
-  const sub = agent.setup ? "Draft" : isMine(agent) ? (agent.on ? null : "Paused") : `from ${firstNameOf(agent.owner)}`;
+  const sub = agent.setup ? "New" : isMine(agent) ? (agent.on ? null : "Paused") : `from ${firstNameOf(agent.owner)}`;
   return (
     <button
       type="button"
@@ -496,32 +498,21 @@ function AgentRow({ agent, mark, selected, onClick }: { agent: Agent; mark: Mark
 const MENU_ITEM = "flex h-8 cursor-default select-none items-center gap-2 rounded-lg px-2.5 text-[13px] text-[#1c2024] outline-none data-[highlighted]:bg-[#f0f0f3]";
 const MENU_POPUP = "min-w-[208px] rounded-xl border border-[#e0e1e6] bg-white p-1 shadow-[0_8px_24px_rgba(15,23,42,0.08)] outline-none";
 
-// Where an agent starts: name a new one, or add one a teammate shared.
-function AgentsPlus({ onNew, onBrowse, rail = false }: { onNew: () => void; onBrowse: () => void; rail?: boolean }) {
+// Where an agent starts: one click, and you are in its chat.
+function AgentsPlus({ onNew, canAdd, maxAgents, rail = false }: { onNew: () => void; canAdd: boolean; maxAgents: number; rail?: boolean }) {
+  const label = canAdd ? "New agent" : `Your admin allows ${maxAgents} agents. Remove one to make another.`;
   return (
-    <Menu.Root>
-      <Menu.Trigger
-        aria-label="Add an agent"
-        data-testid={rail ? "desktop-agents-plus-rail" : "desktop-agents-plus"}
-        className={`grid shrink-0 place-items-center text-[#60646c] outline-none transition-colors hover:bg-[#f0f0f3] hover:text-[#1c2024] focus-visible:bg-[#f0f0f3] data-[popup-open]:bg-[#f0f0f3] data-[popup-open]:text-[#1c2024] ${rail ? "size-10 rounded-xl" : "size-6 rounded-md"}`}
-      >
-        <Plus className={rail ? "size-4" : "size-3.5"} aria-hidden />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner side={rail ? "right" : "bottom"} align="start" sideOffset={6} className="z-50">
-          <Menu.Popup className={MENU_POPUP} style={{ fontFamily: APP_FONT }}>
-            <Menu.Item onClick={onNew} data-testid="desktop-plus-new" className={MENU_ITEM}>
-              <Plus className="size-4 shrink-0 text-[#60646c]" aria-hidden />
-              New agent
-            </Menu.Item>
-            <Menu.Item onClick={onBrowse} data-testid="desktop-plus-browse" className={MENU_ITEM}>
-              <Users className="size-4 shrink-0 text-[#60646c]" aria-hidden />
-              Browse shared agents
-            </Menu.Item>
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+    <button
+      type="button"
+      onClick={onNew}
+      disabled={!canAdd}
+      aria-label={label}
+      title={label}
+      data-testid={rail ? "desktop-agents-plus-rail" : "desktop-agents-plus"}
+      className={`grid shrink-0 place-items-center text-[#60646c] outline-none transition-colors hover:bg-[#f0f0f3] hover:text-[#1c2024] focus-visible:bg-[#f0f0f3] disabled:cursor-not-allowed disabled:opacity-40 ${rail ? "size-10 rounded-xl" : "size-6 rounded-md"}`}
+    >
+      <Plus className={rail ? "size-4" : "size-3.5"} aria-hidden />
+    </button>
   );
 }
 
@@ -671,7 +662,7 @@ function SetupChat({ turns, agents, access, onAsk, onCard, onOpenThread, onOpenS
             <div className="flex flex-col gap-2 pt-10" data-testid="chat-empty">
               <h2 className="text-[20px] font-semibold leading-7 tracking-[-0.2px] text-[#1c2024]">Ask for an agent</h2>
               <p className="max-w-[560px] text-[14px] leading-6 text-[#60646c]">
-                Say what it should watch and how often. Each agent gets its own conversation, works in OpenWork Cloud, and uses only the tools you allow. You can also start one from the + beside Agents.
+                Say what it should do. It gets its own conversation and asks before it changes anything in your apps. You can also start one from the + beside Agents.
               </p>
             </div>
           ) : null}
@@ -854,23 +845,20 @@ function ChatCardView({ card, agents, access, onCard, onOpenThread, onOpenShare,
         ) : undefined}
       >
         <div className="space-y-1 text-[14px] leading-5 text-[#60646c]">
-          <p className="text-[#1c2024]">{scheduleLine(draft.schedule)}</p>
-          <p>Works in OpenWork Cloud, also when this computer is off. Reports back in its own conversation.</p>
-          <p className="whitespace-pre-wrap pt-1">{draft.instructions}</p>
-        </div>
-        <div className="flex flex-col gap-2 border-t border-[#f3f4f6] pt-3">
-          {uses.length === 0 ? <p className="text-[14px] leading-5 text-[#60646c]">It uses no apps yet. You can add them after you create it.</p> : null}
-          {uses.map(({ connector, tools }) => (
-            <div key={connector.id} className="flex items-center gap-2.5 text-[14px] leading-5" data-testid={`chat-card-uses-${connector.id}`} data-level={presetOf(connector, tools)} data-tools={tools.join(",")}>
-              <ConnectorLogo name={connector.name} url={connector.url} size="xs" />
-              <span className="font-medium text-[#1c2024]">{connector.name}</span>
-              <span className="shrink-0 text-[#1c2024]">{accessWord(connector, tools)}</span>
-              <span className="min-w-0 flex-1 truncate text-[#8b8d98]">{toolsLine(connector, tools)}</span>
-            </div>
-          ))}
-          <p className="text-[14px] leading-5 text-[#60646c]">{`Can spend up to ${formatWorkbotCost(draft.budgetMicro)} a month, from your own limit.`}</p>
+          <p className="whitespace-pre-wrap text-[#1c2024]">{draft.instructions}</p>
+          <p>{`${scheduleLine(draft.schedule)}. It reports back in its own conversation.`}</p>
         </div>
         <CardDetails>
+          {uses.length === 0 ? <p>It uses no apps yet. It asks the first time it needs one.</p> : null}
+          {uses.map(({ connector, tools }) => (
+            <p key={connector.id} className="flex items-center gap-2" data-testid={`chat-card-uses-${connector.id}`} data-level={presetOf(connector, tools)} data-tools={tools.join(",")}>
+              <ConnectorLogo name={connector.name} url={connector.url} size="xs" />
+              <span className="text-[#1c2024]">{connector.name}</span>
+              <span>{accessWord(connector, tools)}</span>
+            </p>
+          ))}
+          <p>{`Can spend up to ${formatWorkbotCost(draft.budgetMicro)} a month, from your own limit.`}</p>
+          <p>Works in OpenWork Cloud, also when this computer is off.</p>
           <p>Model: Auto.</p>
           <p>Stays quiet when there is nothing to tell you.</p>
           <p>Saved as <code className="font-mono text-[12px] text-[#1c2024]">{`agents/${agentSlug(draft.name)}.md`}</code>.</p>

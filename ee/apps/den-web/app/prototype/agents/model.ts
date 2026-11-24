@@ -53,10 +53,14 @@ export type Routine = {
 };
 
 export type ScriptStep = {
-  connector: ConnectorId;
+  connector: ConnectorId | "openwork";
   label: string;
   blockedLabel: string;
   tool: string;
+  // How it asks for this the first time, in plain words: "File the missing bug in Linear".
+  ask?: string;
+  // What it says while it does this: "Checking Linear".
+  doing?: string;
   // Only attempted once the instructions mention this word; skipped quietly when the tool is blocked.
   ifInstructed?: string;
 };
@@ -66,24 +70,26 @@ export type ScriptedRun = {
   summary: string;
   blockedSummary?: string;
   steps: ScriptStep[];
-  // A tool it reaches for at the end without being allowed it, so it stops and asks.
-  wants?: { connector: ConnectorId; tool: string; action: string; done: string };
 };
 
 export type RunStep = {
   key: string;
-  connector: ConnectorId | "workbot";
+  connector: ConnectorId | "workbot" | "openwork";
   label: string;
   tool: string;
   blocked?: BlockReason;
+  // Set on a step it may not take yet: how it asks for it.
+  ask?: string;
+  // What it says while it does this. Without it, the label is shown.
+  doing?: string;
 };
 
-// Something a run wanted to do with a tool it isn't allowed. It asked, and this is how that ended.
+// One thing a run wants to do with a tool it isn't allowed yet, in plain words.
+export type AskItem = { connector: ConnectorId | "openwork"; tool: string; action: string };
+
+// What a run asked to do the first time it needed to, and how that ended.
 export type RunAsk = {
-  connector: ConnectorId;
-  tool: string;
-  // What it wanted to do, in a sentence: "Create the “Week of Nov 16” page in Notion".
-  action: string;
+  items: AskItem[];
   state: "allowed" | "always" | "denied" | "expired";
 };
 
@@ -127,7 +133,7 @@ export type OpenWorkArea = "sessions" | "skills" | "automations" | "artifacts";
 export type RunsOn = { cloud: boolean; computers: string[] };
 export const MY_COMPUTERS: { id: string; name: string; online: boolean }[] = [
   { id: "laptop", name: "This MacBook", online: true },
-  { id: "studio", name: "Office Mac mini", online: false },
+  { id: "studio", name: "Mac Studio", online: true },
 ];
 
 // A reply in a thread: a follow-up about one result. It never changes the agent.
@@ -169,19 +175,19 @@ export type Agent = {
   added: boolean;
   // An admin's mark that the organization stands behind this shared agent.
   approved: boolean;
-  // Set while it is a draft: made from +, seen only by its owner, not on yet.
+  // Set while it is new: made from +, seen only by its owner, not started yet.
   setup: AgentSetup | null;
+  // The member's own words that made it, kept at the top of its conversation. Empty for agents made another way.
+  said: string;
   notes: AgentNote[];
 };
 
-export type SetupStepId = "tools" | "routine" | "pays";
-
+// A new agent is a chat. It hears its job, says what it will do and how often, and waits for one answer.
 export type AgentSetup = {
-  answered: Partial<Record<SetupStepId, "done" | "skipped">>;
-  // What its job suggests. Offered on the setup cards and applied only when accepted.
-  tools: Record<ConnectorId, string[]>;
-  capped: string[];
+  // The schedule it proposes, read from the job. Every hour unless the job says otherwise.
   schedule: Schedule;
+  // "start" asks whether to begin. "often" asks how often instead.
+  asking: "start" | "often";
 };
 
 // Something an agent was told to keep in mind. On a shared agent that changes it for
@@ -224,8 +230,8 @@ export type AgentSession = {
   // Steps shown so far, out of the run worked out when it started.
   shown: number;
   run: AgentRun;
-  // Set while it waits for an OK to use a tool it isn't allowed. Raised in the background, it expires after 30 minutes.
-  ask: (Omit<RunAsk, "state"> & { raisedMs: number; background: boolean }) | null;
+  // What it will ask before it goes past step `at`. Raised in the background, the question expires after 30 minutes.
+  ask: { items: AskItem[]; at: number; raisedMs: number; background: boolean } | null;
   heard: string[];
 };
 
@@ -455,7 +461,7 @@ export function delivered(key: string): RunStep {
 }
 
 // What every agent has that the samples below don't spell out.
-type AgentBase = Omit<Agent, "color" | "openwork" | "runsOn" | "alsoSlack" | "replies" | "memoryChecks">;
+type AgentBase = Omit<Agent, "color" | "openwork" | "runsOn" | "alsoSlack" | "replies" | "memoryChecks" | "said">;
 const SAMPLE_EXTRAS: Record<string, Partial<Agent>> = {
   "agent-triage": {
     color: "blue",
@@ -480,6 +486,7 @@ function finishAgent(base: AgentBase, index: number): Agent {
     alsoSlack: false,
     replies: [],
     memoryChecks: [],
+    said: "",
     ...base,
     ...SAMPLE_EXTRAS[base.id],
   };
@@ -607,7 +614,7 @@ function sampleBases(): AgentBase[] {
           blockedSummary: "Drafted notes for 9 merged pull requests and sent them to you. Couldn't save to Notion: it isn't allowed to create pages there.",
           steps: [
             { connector: "github", label: "Read 9 merged pull requests", blockedLabel: "Couldn't read GitHub", tool: "list_pull_requests" },
-            { connector: "notion", label: "Created the page “Release notes, week 47” in Notion", blockedLabel: "Couldn't create a page in Notion", tool: "create_page" },
+            { connector: "notion", label: "Created the page “Release notes, week 47” in Notion", blockedLabel: "Couldn't create a page in Notion", tool: "create_page", ask: "Save the release notes as a page in Notion" },
           ],
         },
       ],
@@ -646,7 +653,7 @@ function sampleBases(): AgentBase[] {
         {
           id: "inbox-x", routine: "Inbox sweep", when: "Fri 3:00 PM", today: false, outcome: "sent", costMicro: 96_000,
           summary: "1 customer reply has waited more than a day: a question about renewing their plan.",
-          wanted: { connector: "gmail", tool: "create_draft", action: "Use “Create draft” in Gmail", state: "expired" },
+          wanted: { items: [{ connector: "gmail", tool: "create_draft", action: "Draft a reply in Gmail" }], state: "expired" },
           steps: [
             { key: "a", connector: "gmail", label: "Read 26 threads in your inbox", tool: "search_threads" },
             { key: "b", connector: "gmail", label: "Didn't draft a reply", tool: "create_draft", blocked: "Not allowed" },
@@ -665,7 +672,7 @@ function sampleBases(): AgentBase[] {
           blockedSummary: "1 customer reply has waited more than a day.",
           steps: [
             { connector: "gmail", label: "Read 23 threads in your inbox", blockedLabel: "Couldn't read Gmail", tool: "search_threads" },
-            { connector: "gmail", ifInstructed: "draft", label: "Drafted 1 reply for you to review", blockedLabel: "Couldn't draft a reply", tool: "create_draft" },
+            { connector: "gmail", ifInstructed: "draft", label: "Drafted 1 reply for you to review", blockedLabel: "Couldn't draft a reply", tool: "create_draft", ask: "Draft a reply in Gmail" },
           ],
         },
         {
@@ -849,7 +856,24 @@ export function effectiveLevel(agent: Agent, access: Access, connected: Record<C
   return presetOf(connectorById(id), effectiveTools(agent, access, connected, id));
 }
 
-export function blockReason(agent: Agent, access: Access, connected: Record<ConnectorId, boolean>, id: ConnectorId, tool: string): BlockReason | null {
+// Starting a session is OpenWork's own tool. It runs on one of the member's computers, so an admin's "Cloud only" rule blocks it.
+const SESSION_TOOLS = OPENWORK_AREAS.find((area) => area.id === "sessions");
+
+export function stepWrites(connector: ConnectorId | "openwork" | "workbot", tool: string): boolean {
+  if (connector === "workbot") return false;
+  if (connector === "openwork") return SESSION_TOOLS?.writeTools.includes(tool) ?? false;
+  return isWriteTool(connectorById(connector), tool);
+}
+
+export function stepAppName(connector: ConnectorId | "openwork" | "workbot"): string {
+  return connector === "openwork" ? "OpenWork" : connector === "workbot" ? "Slack" : connectorById(connector).name;
+}
+
+export function blockReason(agent: Agent, access: Access, connected: Record<ConnectorId, boolean>, id: ConnectorId | "openwork", tool: string): BlockReason | null {
+  if (id === "openwork") {
+    if (access.cloudOnly) return "Blocked by admin";
+    return agent.openwork.sessions.includes(tool) ? null : "Not allowed";
+  }
   if (!connected[id]) return "Not connected";
   if (access.blocked[id].includes(tool)) return "Blocked by admin";
   return agent.tools[id].includes(tool) ? null : "Not allowed";
@@ -974,7 +998,7 @@ export function keepRoutineState(next: Routine[], current: Routine[]): Routine[]
 }
 
 export function agentStateLine(agent: Agent, access: Access): string {
-  if (agent.setup) return agent.instructions.trim().length === 0 ? "Draft. Tell it what to do." : "Draft. Finish setting it up, then turn it on.";
+  if (agent.setup) return agent.instructions.trim().length === 0 ? "New. Tell it what to do." : "New. Answer its question to start it.";
   if (agent.instructions.trim().length === 0) return "Not set up yet.";
   if (!agent.on) return "Paused.";
   if (overBudget(agent, access)) return "Over budget. It runs again next month, or when you raise its budget.";
@@ -1006,7 +1030,7 @@ export function genericScript(agent: Agent, access: Access, connected: Record<Co
 
 function whyBlocked(step: RunStep): string {
   const tool = toolLabel(step.tool);
-  if (step.blocked === "Not connected") return "That app isn't connected for you.";
+  if (step.blocked === "Not connected") return `${stepAppName(step.connector)} isn't connected for you.`;
   if (step.blocked === "Blocked by admin") return `Your admin blocks “${tool}” for agents.`;
   return `“${tool}” is off for this agent.`;
 }
@@ -1027,12 +1051,12 @@ function actOut(agent: Agent, access: Access, connected: Record<ConnectorId, boo
     }
     const key = `${base.id}-${index}`;
     if (reason === null) {
-      steps.push({ key, connector: step.connector, label: step.label, tool: step.tool });
+      steps.push({ key, connector: step.connector, label: step.label, tool: step.tool, doing: step.doing });
       continue;
     }
-    const blocked: RunStep = { key, connector: step.connector, label: step.blockedLabel, tool: step.tool, blocked: reason };
+    const blocked: RunStep = { key, connector: step.connector, label: step.blockedLabel, tool: step.tool, blocked: reason, ask: step.ask, doing: step.doing };
     steps.push(blocked);
-    if (isWriteTool(connectorById(step.connector), step.tool)) skippedWrite = true;
+    if (stepWrites(step.connector, step.tool)) skippedWrite = true;
     else failedRead = failedRead ?? blocked;
   }
   const cost = Math.round(modelById(agent.model).runMicro * (0.8 + 0.1 * (agent.runCount % 5)));
@@ -1093,8 +1117,13 @@ export function startSession(agent: Agent, access: Access, connected: Record<Con
   const run = input.kind === "ask" && input.asked
     ? askAgent(agent, access, connected, input.asked, input.when, input.id)
     : simulateRun(agent, access, connected, input.when, input.id, input.routine);
-  const wanted = run.steps.find((step) => step.blocked === "Not allowed" && step.connector !== "workbot" && isWriteTool(connectorById(step.connector), step.tool));
-  const connector = wanted && wanted.connector !== "workbot" ? wanted.connector : null;
+  // Everything this run would change with a tool it isn't allowed yet. It asks for all of it once, when it gets to the first.
+  const items = run.steps.flatMap((step): AskItem[] => (
+    step.blocked === "Not allowed" && step.connector !== "workbot" && stepWrites(step.connector, step.tool)
+      ? [{ connector: step.connector, tool: step.tool, action: step.ask ?? `Use “${toolLabel(step.tool)}” in ${stepAppName(step.connector)}` }]
+      : []
+  ));
+  const at = run.steps.findIndex((step) => items.some((item) => item.tool === step.tool && item.connector === step.connector));
   return {
     id: input.id,
     agentId: agent.id,
@@ -1105,9 +1134,7 @@ export function startSession(agent: Agent, access: Access, connected: Record<Con
     state: input.working ? "working" : "waiting",
     shown: 0,
     run,
-    ask: wanted && connector
-      ? { connector, tool: wanted.tool, action: `Use “${toolLabel(wanted.tool)}” in ${connectorById(connector).name}`, raisedMs: input.nowMs, background: input.kind !== "ask" }
-      : null,
+    ask: items.length > 0 ? { items, at: Math.max(0, at), raisedMs: input.nowMs, background: input.kind !== "ask" } : null,
     heard: [],
   };
 }
@@ -1127,15 +1154,18 @@ export function settleRun(agent: Agent, session: AgentSession, answer: RunAsk["s
   const heard = session.heard[session.heard.length - 1];
   const base = heard ? { ...run, heard } : run;
   if (!ask || answer === null) return base;
-  const wanted: RunAsk = { connector: ask.connector, tool: ask.tool, action: ask.action, state: answer };
+  const wanted: RunAsk = { items: ask.items, state: answer };
   if (answer === "allowed" || answer === "always") {
-    const label = doneLabel(agent, ask.tool) ?? ask.action;
-    const scripted = agent.script.find((entry) => entry.steps.some((step) => step.tool === ask.tool));
+    const asked = (step: RunStep) => ask.items.find((item) => item.tool === step.tool && item.connector === step.connector);
+    const scripted = agent.script.find((entry) => entry.steps.some((step) => ask.items.some((item) => item.tool === step.tool)));
     return {
       ...base,
       wanted,
       summary: scripted?.summary ?? run.summary,
-      steps: run.steps.map((step) => (step.tool === ask.tool ? { key: step.key, connector: step.connector, label, tool: step.tool } : step)),
+      steps: run.steps.map((step) => {
+        const item = asked(step);
+        return item ? { key: step.key, connector: step.connector, label: doneLabel(agent, step.tool) ?? item.action, tool: step.tool, doing: step.doing } : step;
+      }),
     };
   }
   return { ...base, wanted };
@@ -1317,6 +1347,7 @@ export function newAgent(id: string, access: Access): Agent {
     added: true,
     approved: false,
     setup: null,
+    said: "",
     notes: [],
   };
 }
@@ -1543,41 +1574,169 @@ function toolsForJob(job: string, access: Access): { mentioned: Connector[]; too
 }
 
 // ---------------------------------------------------------------------------
-// Starting from +: name it, land in its thread as a draft, answer a few cards.
+// Starting from +: a new agent is a chat. Its first message from you is its
+// job. It names itself, says what it will do and how often, and asks one thing.
 // ---------------------------------------------------------------------------
 
-export const SETUP_STEPS: SetupStepId[] = ["tools", "routine", "pays"];
-
-export const JOB_EXAMPLES: string[] = [
-  "Check my open pull requests on GitHub every weekday at 9 and tell me which ones need my review",
-  "Read my inbox every 2 hours and tell me which customers are waiting on me",
-  "Sum up what changed in Linear and Notion every Friday at 4",
+// What a new agent offers when you don't know what to say. The short line is the option; the long one is the job it sends.
+export const JOB_EXAMPLES: { label: string; job: string }[] = [
+  {
+    label: "Watch #bugs in Slack and get each bug fixed",
+    job: "Watch #bugs in Slack. For each new bug, check Linear and file it if it's missing. Then start a coding session on my Mac Studio to fix it, and reply in the Slack thread.",
+  },
+  {
+    label: "Tell me which pull requests need my review",
+    job: "Check my open pull requests on GitHub every weekday at 9 and tell me which ones need my review.",
+  },
+  {
+    label: "Tell me which customers are waiting on me",
+    job: "Read my inbox every 2 hours and tell me which customers are waiting on me.",
+  },
 ];
 
-export function draftAgent(id: string, name: string, access: Access): Agent {
-  return { ...newAgent(id, access), name, setup: { answered: {}, tools: noTools(), capped: [], schedule: { ...DEFAULT_SCHEDULE } } };
+// How often, as the options a new agent offers. Anything else can be typed.
+export const OFTEN_CHOICES: { label: string; schedule: Schedule }[] = [
+  { label: "Every hour", schedule: { ...DEFAULT_SCHEDULE, rhythm: "1h" } },
+  { label: "Every 2 hours", schedule: { ...DEFAULT_SCHEDULE, rhythm: "2h" } },
+  { label: "Once a day, at 9", schedule: { ...DEFAULT_SCHEDULE } },
+  { label: "Once a week, on Monday", schedule: { ...DEFAULT_SCHEDULE, rhythm: "weekly" } },
+];
+
+// The sample job: a bug reported in Slack ends as an issue, a draft pull request and a reply.
+// Reading is free. Anything that changes something is asked for the first time it comes up.
+const BUGS_SCRIPT: ScriptedRun[] = [
+  {
+    outcome: "sent",
+    summary: "1 new bug: exports time out for large workspaces. I filed it as ENG-482, and a coding session on your Mac Studio opened draft PR #513. I replied in the Slack thread with both.",
+    blockedSummary: "1 new bug isn't in Linear yet: exports time out for large workspaces. I left it as it is.",
+    steps: [
+      { connector: "slack", label: "Read 4 new messages in #bugs", blockedLabel: "Couldn't read #bugs", tool: "read_channel", doing: "Reading #bugs" },
+      { connector: "linear", label: "Looked for each bug in Linear. 1 is missing", blockedLabel: "Couldn't read Linear", tool: "list_issues", doing: "Checking Linear" },
+      { connector: "linear", label: "Filed ENG-482, “Export times out for large workspaces”", blockedLabel: "Didn't file the missing bug", tool: "create_issue", ask: "File the missing bug in Linear", doing: "Filing the bug in Linear" },
+      { connector: "openwork", label: "Started a coding session on your Mac Studio. It opened draft PR #513", blockedLabel: "Didn't start a coding session", tool: "start_session", ask: "Start a coding session on your Mac Studio", doing: "Fixing it in a coding session on your Mac Studio" },
+      { connector: "slack", label: "Replied in the Slack thread with the issue and the PR", blockedLabel: "Didn't reply in Slack", tool: "send_message", ask: "Reply in the Slack thread", doing: "Replying in the Slack thread" },
+    ],
+  },
+  {
+    outcome: "quiet",
+    summary: "No new bugs in #bugs since the last check.",
+    steps: [
+      { connector: "slack", label: "Read 2 new messages in #bugs", blockedLabel: "Couldn't read #bugs", tool: "read_channel", doing: "Reading #bugs" },
+      { connector: "linear", label: "Looked for each bug in Linear. All are there", blockedLabel: "Couldn't read Linear", tool: "list_issues", doing: "Checking Linear" },
+    ],
+  },
+];
+
+function isBugsJob(job: string): boolean {
+  return /#bugs|\bbugs?\b/.test(job) && /slack/.test(job);
 }
 
-export function setupStep(setup: AgentSetup): SetupStepId | null {
-  return SETUP_STEPS.find((step) => setup.answered[step] === undefined) ?? null;
+function capitalize(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 }
 
-// The first message in a draft's thread is its job. What it says suggests the tools and a first routine.
-export function giveJob(agent: Agent, text: string, access: Access): Agent {
-  if (!agent.setup) return agent;
+// An agent is named from its job, so nobody has to think of a name first. It can be renamed at any time.
+export function nameFromJob(text: string, taken: string[]): string {
+  const job = text.toLowerCase();
+  const channel = /#([a-z][a-z0-9-]*)/.exec(job)?.[1];
+  const app = mentionedConnectors(job)[0];
+  const base = channel
+    ? `${capitalize(channel.replace(/s$/, ""))} watcher`
+    : /pull request|\bprs?\b/.test(job) ? "PR review"
+      : /inbox|email/.test(job) ? "Inbox check"
+        : app ? `${app.name} check` : "My agent";
+  const used = (candidate: string) => taken.some((entry) => entry.toLowerCase() === candidate.toLowerCase());
+  if (!used(base)) return base;
+  let count = 2;
+  while (used(`${base} ${count}`)) count += 1;
+  return `${base} ${count}`;
+}
+
+// A routine is named for what it does, the way a person would say it.
+function routineNameFor(job: string, schedule: Schedule): string {
+  const channel = /#([a-z][a-z0-9-]*)/.exec(job.toLowerCase())?.[1];
+  return channel ? `Check #${channel}` : routineName(schedule);
+}
+
+// "Every hour on weekdays", for a sentence.
+export function oftenWords(schedule: Schedule): string {
+  if (schedule.rhythm === "weekly") return `every ${schedule.weekday} at ${hourLabel(schedule.hour)}`;
+  const days = schedule.days === "weekdays" ? "weekday" : "day";
+  if (schedule.rhythm === "daily") return `every ${days} at ${hourLabel(schedule.hour)}`;
+  const every = RHYTHMS.find((entry) => entry.id === schedule.rhythm)?.everyHours ?? 1;
+  return `every ${every === 1 ? "hour" : `${every} hours`} on ${schedule.days === "weekdays" ? "weekdays" : "every day"}`;
+}
+
+// What a new agent says back once it has its job: the plan in one or two sentences, with how often in it.
+export function planLine(agent: Agent, schedule: Schedule): string {
+  const often = oftenWords(schedule);
+  if (isBugsJob(agent.said.toLowerCase())) {
+    return `Got it. I'll check #bugs ${often}. For each new bug I look for it in Linear, file it if it's missing, start a coding session on your Mac Studio that opens a draft pull request, and reply in the Slack thread.`;
+  }
+  // The member said "my inbox" and "tell me". Said back, that is "your inbox" and "tell you".
+  const [first = "", ...rest] = agent.instructions.split(/(?<=[.!?])\s+/);
+  const promise = lowerFirst(first.replace(/[.!?]$/, "")).replace(/\bmy\b/g, "your").replace(/\bme\b/g, "you").replace(/\bmine\b/g, "yours");
+  const after = rest.join(" ").replace(/\bmy\b/g, "your").replace(/\bme\b/g, "you");
+  return `Got it. I'll ${promise}, ${often}.${after ? ` ${after}` : ""}`;
+}
+
+const COLOR_ORDER: AgentColor[] = ["red", "teal", "green", "pink", "slate", "blue", "violet", "orange"];
+
+// A new agent has no name and no job yet. Its colour is picked for it.
+export function draftAgent(id: string, access: Access, taken: AgentColor[]): Agent {
+  const color = COLOR_ORDER.find((entry) => !taken.includes(entry)) ?? "slate";
+  // No budget of its own: it is paid from the member's own limit, up to what the admin allows an agent. Nobody is asked.
+  return { ...newAgent(id, access), name: "New agent", color, budgetMicro: null, setup: { schedule: { ...DEFAULT_SCHEDULE, rhythm: "1h" }, asking: "start" } };
+}
+
+const SAYS_WHEN = /every (?:\d|hour|day|weekday|morning|evening|week|monday|tuesday|wednesday|thursday|friday)|each (?:hour|day|morning|evening|week)|daily|hourly|weekly|once a (?:day|week)|\bat \d{1,2}\b/;
+
+// A job that says no time is checked every hour. One that does keeps what it says.
+function scheduleFromJob(said: string): Schedule {
+  return SAYS_WHEN.test(said) ? parseSchedule(said) : { ...DEFAULT_SCHEDULE, rhythm: "1h" };
+}
+
+// A short message that only says when ("every 2 hours", "once a day at 9") changes the schedule, not the job.
+export function onlySaysWhen(text: string): boolean {
   const said = text.trim().toLowerCase();
-  const { tools, capped } = toolsForJob(said, access);
-  const suggested = Object.values(tools).some((entry) => entry.length > 0);
+  return said.length <= 48 && SAYS_WHEN.test(said) && mentionedConnectors(said).length === 0 && !said.includes("#");
+}
+
+// The first message in a new agent's chat is its job. It takes its name from it.
+export function giveJob(agent: Agent, text: string, taken: string[]): Agent {
+  if (!agent.setup) return agent;
+  const said = text.trim();
+  if (agent.said.length > 0 && onlySaysWhen(said)) {
+    return { ...agent, setup: { schedule: parseSchedule(said.toLowerCase()), asking: "start" } };
+  }
   return {
     ...agent,
-    instructions: instructionsFrom(text.trim()),
-    setup: { ...agent.setup, tools: suggested ? tools : agent.setup.tools, capped, schedule: parseSchedule(said) },
+    name: nameFromJob(said, taken),
+    said,
+    instructions: instructionsFrom(said),
+    setup: { schedule: scheduleFromJob(said.toLowerCase()), asking: "start" },
   };
 }
 
-export function answerSetup(agent: Agent, step: SetupStepId, answer: "done" | "skipped", patch: Partial<Agent> = {}): Agent {
+// Starting it makes its first routine and lets it read the apps its job names. Reading is all it gets:
+// the first time it wants to change something, it asks. Its budget is the member's own limit until they say otherwise.
+export function startAgent(agent: Agent, access: Access, schedule?: Schedule): Agent {
   if (!agent.setup) return agent;
-  return { ...agent, ...patch, setup: { ...agent.setup, answered: { ...agent.setup.answered, [step]: answer } } };
+  const job = agent.said.toLowerCase();
+  const when = schedule ?? agent.setup.schedule;
+  const tools = noTools();
+  for (const connector of mentionedConnectors(job)) {
+    tools[connector.id] = connector.readTools.filter((tool) => !access.blocked[connector.id].includes(tool));
+  }
+  return {
+    ...agent,
+    on: true,
+    setup: null,
+    tools,
+    openwork: isBugsJob(job) ? { ...noOpenWork(), sessions: ["list_sessions", "read_session"] } : agent.openwork,
+    routines: [makeRoutine(`${agent.id}-routine`, routineNameFor(agent.said, when), "", when)],
+    script: isBugsJob(job) ? BUGS_SCRIPT : /pull request|\bprs?\b/.test(job) ? PR_REVIEW_SCRIPT : [],
+  };
 }
 
 export function agentFromDraft(draft: AgentDraft, id: string, access: Access): Agent {

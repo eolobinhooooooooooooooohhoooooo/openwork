@@ -17,12 +17,14 @@ import { formatWorkbotCost } from "../../(den)/dashboard/_features/workbot-usage
 import {
   type Access,
   type Agent,
+  type AgentColor,
   type ConnectorId,
   type PaidBy,
   type Preset,
   type Routine,
   type Schedule,
   type ToolSet,
+  AGENT_COLORS,
   BUDGET_DOLLARS,
   CONNECTORS,
   DEFAULT_SCHEDULE,
@@ -134,13 +136,13 @@ export function AgentSettings({ agent, access, connected, running, onPatch, onRe
   const instructionsChanged = instructions.trim() !== agent.instructions.trim();
   const setUp = agent.instructions.trim().length > 0;
   const shared = isShared(agent.share, agent.owner);
-  const title = draft ? "Draft" : !setUp ? "Not set up yet" : !mine ? "Run its routines for me" : !agent.on ? "Paused" : over ? "Over budget" : "On";
+  const title = draft ? "Not started yet" : !setUp ? "Not set up yet" : !mine ? "Run its routines for me" : !agent.on ? "Paused" : over ? "Over budget" : "On";
   const sentence = draft
-    ? "Only you can see it. Answer the cards in its thread, then turn it on."
+    ? "Only you can see it. Tell it its job in the chat and it starts."
     : !setUp
       ? "Tell it what to do, choose what it can use, then turn it on."
       : !agent.on
-        ? mine ? "It keeps its instructions and history, and runs nothing." : "Off for you. You can still ask it things in its thread."
+        ? mine ? "It keeps its instructions and history, and runs nothing." : "Off for you. You can still ask it things in its conversation."
         : over
           ? `It used ${formatWorkbotCost(agent.spentMicro)} of ${formatWorkbotCost(budget ?? 0)}. It runs again next month, or when its budget is raised.`
           : `${nextRunText(agent)}. ${budget === null ? budgetLine(agent, access) : `${budgetLine(agent, access)} this month`}.`;
@@ -165,6 +167,9 @@ export function AgentSettings({ agent, access, connected, running, onPatch, onRe
               {nameChanged ? <DenButton size="xs" onClick={() => onPatch({ name: name.trim() })}>Save</DenButton> : null}
             </div>
           </Field>
+          <Row label="Colour">
+            <ColorPicker color={agent.color} onChange={(color) => onPatch({ color })} />
+          </Row>
           <Field label="Instructions" htmlFor={ids.instructions}>
             <DenTextarea id={ids.instructions} rows={4} value={instructions} maxLength={2000} className="resize-none [field-sizing:content]"
               placeholder={"Read my open issues and review requests.\nTell me what needs me today, most urgent first."}
@@ -248,6 +253,27 @@ export function AgentSettings({ agent, access, connected, running, onPatch, onRe
   );
 }
 
+// An agent's colour is picked for it when it is made. It can be changed here.
+function ColorPicker({ color, onChange }: { color: AgentColor; onChange: (color: AgentColor) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Colour" data-testid="agent-color">
+      {AGENT_COLORS.map((entry) => (
+        <button
+          key={entry.id}
+          type="button"
+          role="radio"
+          aria-checked={color === entry.id}
+          aria-label={entry.id}
+          onClick={() => onChange(entry.id)}
+          data-testid={`agent-color-${entry.id}`}
+          className={`size-5 rounded-full transition-shadow ${color === entry.id ? "ring-2 ring-gray-900 ring-offset-2" : ""}`}
+          style={{ backgroundColor: entry.fill }}
+        />
+      ))}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Routines: each one is something the agent does on its own schedule
 // ---------------------------------------------------------------------------
@@ -275,7 +301,7 @@ function RoutinesSection({ agent, running, onPatch, onRun }: {
     <ItemSection title="Routines" variant="rule" testId="agent-routines" meta={routinesLine(agent)}>
       <div className="flex flex-col divide-y divide-gray-100">
         {agent.routines.length === 0 ? (
-          <p className="py-3 text-[13px] leading-5 text-gray-500" data-testid="agent-routines-empty">No routines, so it works only when someone asks it in its thread.</p>
+          <p className="py-3 text-[13px] leading-5 text-gray-500" data-testid="agent-routines-empty">No routines, so it works only when someone asks it in its conversation.</p>
         ) : null}
         {agent.routines.map((routine) => (
           <RoutineRow
@@ -359,8 +385,8 @@ function RoutineRow({ routine, others, open, running, onOpen, onChange, onTest, 
   );
 }
 
-// When a routine runs. The setup card in a draft's thread uses the same editor.
-export function ScheduleEditor({ schedule, onChange }: { schedule: Schedule; onChange: (schedule: Schedule) => void }) {
+// When a routine runs.
+function ScheduleEditor({ schedule, onChange }: { schedule: Schedule; onChange: (schedule: Schedule) => void }) {
   const set = (patch: Partial<Schedule>) => onChange({ ...schedule, ...patch });
   const hourly = schedule.rhythm !== "daily" && schedule.rhythm !== "weekly";
   return (
@@ -457,13 +483,12 @@ function SharingSection({ agent, access, onOpenShare, onStopSharing }: {
   );
 }
 
-// Who pays and how much. The setup card in a draft's thread uses the same rows, without the spend so far.
-export function BudgetRows({ agent, access, onBudget, onPaidBy, spend = true }: {
+// Who pays and how much. A new agent is paid from its owner's own limit; nobody is asked while it is being made.
+function BudgetRows({ agent, access, onBudget, onPaidBy }: {
   agent: Agent;
   access: Access;
   onBudget: (budgetMicro: number | null) => void;
   onPaidBy: (paidBy: PaidBy) => void;
-  spend?: boolean;
 }) {
   const budget = effectiveBudget(agent, access);
   const shared = isShared(agent.share, agent.owner);
@@ -491,7 +516,7 @@ export function BudgetRows({ agent, access, onBudget, onPaidBy, spend = true }: 
           </DenSelect>
         </div>
       </Row>
-      {spend ? <SpendThisMonth agent={agent} access={access} caption={shared ? "Your own use. Each person it works for gets the same budget." : undefined} /> : null}
+      <SpendThisMonth agent={agent} access={access} caption={shared ? "Your own use. Each person it works for gets the same budget." : undefined} />
     </>
   );
 }
@@ -735,7 +760,7 @@ export function SharedAgentSettings({ agent, access, connected, atAgentLimit, on
     ? `Your use reached ${formatWorkbotCost(agent.spentMicro)} of ${formatWorkbotCost(budget ?? 0)}. It works for you again next month, or when ${ownerFirst} raises its budget.`
     : agent.on
       ? `${nextRunText(agent)}. It works with your own accounts, and ${ownerFirst} never sees what it finds for you.`
-      : `Off for you. You can still ask it things in its thread. Either way it works with your own accounts, and ${ownerFirst} never sees what it finds for you.`;
+      : `Off for you. You can still ask it things in its conversation. Either way it works with your own accounts, and ${ownerFirst} never sees what it finds for you.`;
 
   return (
     <div className="flex flex-col gap-6" data-testid="agent-settings" data-owner={agent.owner} data-role="collaborator">
@@ -752,7 +777,7 @@ export function SharedAgentSettings({ agent, access, connected, atAgentLimit, on
 
       <ItemSection title="Routines" variant="rule" testId="agent-routines" meta={routinesLine(agent)}>
         <div className="flex flex-col divide-y divide-gray-100">
-          {agent.routines.length === 0 ? <p className="py-3 text-[13px] leading-5 text-gray-500">No routines. It works only when you ask it in its thread.</p> : null}
+          {agent.routines.length === 0 ? <p className="py-3 text-[13px] leading-5 text-gray-500">No routines. It works only when you ask it in its conversation.</p> : null}
           {agent.routines.map((routine) => (
             <div key={routine.id} className="flex min-h-[44px] flex-col justify-center py-2" data-testid={`agent-routine-${routine.id}`} data-on={routine.on ? "true" : "false"}>
               <span className={`truncate text-[13px] font-medium ${routine.on ? "text-gray-900" : "text-gray-500"}`}>{routine.name}</span>

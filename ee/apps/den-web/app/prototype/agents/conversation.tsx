@@ -1,11 +1,10 @@
 "use client";
 
-import { ChevronDown, ChevronRight, CornerDownRight, Lock, MessageSquare, Play, ShieldCheck, Square, UserPlus, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, Clock3, Lock, Play, Settings2, ShieldCheck, Square, UserPlus, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { peopleLabel } from "../../(den)/dashboard/_components/access-summary";
 import { ConnectorLogo } from "../../(den)/dashboard/_components/item-logo";
-import { formatWorkbotCost } from "../../(den)/dashboard/_features/workbot-usage/workbot-usage-data";
-import { AppButton, AppSwitch, CardRow, CardShell, Composer, UserBubble } from "./app-parts";
+import { AppButton, AppSwitch, CardRow, CardShell, Composer, SystemLine, UserBubble } from "./app-parts";
 import {
   type Access,
   type Agent,
@@ -13,18 +12,15 @@ import {
   type AgentNote,
   type AgentRun,
   type AgentSession,
+  type AskItem,
   type RunAsk,
   type RunStep,
   AGENT_COLORS,
   ASK_EXPIRES_MS,
-  MY_COMPUTERS,
   ROLE_LABEL,
-  agentFilePath,
   agentThread,
-  budgetLine,
   canChange,
   connectorById,
-  effectiveBudget,
   firstNameOf,
   isMine,
   isShared,
@@ -33,14 +29,13 @@ import {
   nextRunText,
   overBudget,
   personName,
+  planLine,
   roleOf,
   routineWhen,
-  routinesLine,
   sharedPeople,
   toolLabel,
   usedByLine,
 } from "./model";
-
 // ---------------------------------------------------------------------------
 // One agent, one conversation. Every routine reports back here, background work
 // shows inline while it runs, and each run is a thread you can reply in.
@@ -66,11 +61,12 @@ function clockAt(ms: number): string {
   return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(new Date(ms));
 }
 
+// What it is doing right now, in a few words.
 export function sessionStateLabel(session: AgentSession, access: Access): string {
   if (session.state === "needs_you") return "Waiting for you";
-  if (session.state === "waiting") return `Waiting · starts when one of ${access.atOnce} finishes`;
+  if (session.state === "waiting") return `Waiting for one of its ${access.atOnce} at once to finish`;
   const step = session.run.steps[Math.min(session.shown, session.run.steps.length - 1)];
-  return step && session.shown < session.run.steps.length ? `Working · ${step.label}` : "Working · Writing it up";
+  return step && session.shown < session.run.steps.length ? step.doing ?? step.label : "Writing it up";
 }
 
 // ---------------------------------------------------------------------------
@@ -131,10 +127,9 @@ export type ConversationProps = {
   onForget: (noteId: string) => void;
   onOpenThread: (id: string) => void;
   onTurnOn: () => void;
-  onRun: () => void;
 };
 
-export function AgentConversation({ agent, access, sessions, nowMs, header, onSend, onStop, onAnswerAsk, onAnswerNote, onForget, onOpenThread, onTurnOn, onRun }: ConversationProps) {
+export function AgentConversation({ agent, access, sessions, nowMs, header, onSend, onStop, onAnswerAsk, onAnswerNote, onForget, onOpenThread, onTurnOn }: ConversationProps) {
   const [text, setText] = useState("");
   const mine = isMine(agent);
   const steers = canChange(agent);
@@ -163,15 +158,15 @@ export function AgentConversation({ agent, access, sessions, nowMs, header, onSe
     : !steers
       ? `Only you see its answers. Only ${owner} and the managers ${owner} picks can change it.`
       : isShared(agent.share, agent.owner)
-        ? "Ask it anything. Anything you tell it to keep, it checks with you first, because it changes it for everyone."
+        ? "Anything you tell it to keep, it checks with you first, because it changes it for everyone."
         : undefined;
 
   return (
     <>
       {header}
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto" data-testid="agent-thread" data-agent={agent.id} data-role={roleOf(agent) ?? "collaborator"}>
-        <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6 px-5 py-6">
-          <AgentIntro agent={agent} access={access} />
+        <div className="mx-auto flex w-full max-w-[720px] flex-col gap-5 px-5 py-6">
+          <AgentIntro agent={agent} />
 
           {offForMe ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#e0e1e6] px-4 py-3" data-testid="thread-off">
@@ -182,7 +177,7 @@ export function AgentConversation({ agent, access, sessions, nowMs, header, onSe
 
           {items.map((item) => {
             if (item.kind === "run") {
-              return <RunMessage key={item.key} agent={agent} run={item.run} privately={!mine} replies={agent.replies.filter((reply) => reply.runId === item.run.id).length} onThread={() => onOpenThread(item.run.id)} />;
+              return <RunMessage key={item.key} agent={agent} run={item.run} replies={agent.replies.filter((reply) => reply.runId === item.run.id).length} onThread={() => onOpenThread(item.run.id)} />;
             }
             if (item.kind === "memory") {
               return <MemoryAnswer key={item.key} agent={agent} onForget={onForget} />;
@@ -192,7 +187,7 @@ export function AgentConversation({ agent, access, sessions, nowMs, header, onSe
 
           {background.map((session) => (
             session.state === "needs_you" && session.ask ? (
-              <AskCard key={session.id} agent={agent} session={session} nowMs={nowMs} onAnswer={(answer) => onAnswerAsk(session.id, answer)} onThread={() => onOpenThread(session.id)} />
+              <AskCard key={session.id} agent={agent} session={session} nowMs={nowMs} onAnswer={(answer) => onAnswerAsk(session.id, answer)} />
             ) : (
               <SessionLine key={session.id} agent={agent} session={session} access={access} onOpen={() => onOpenThread(session.id)} onStop={() => onStop(session.id)} />
             )
@@ -202,9 +197,9 @@ export function AgentConversation({ agent, access, sessions, nowMs, header, onSe
             <div className="flex flex-col gap-3" data-testid="conversation-asking">
               {asking.asked ? <UserBubble>{asking.asked}</UserBubble> : null}
               {asking.state === "needs_you" && asking.ask ? (
-                <AskCard agent={agent} session={asking} nowMs={nowMs} onAnswer={(answer) => onAnswerAsk(asking.id, answer)} onThread={null} />
+                <AskCard agent={agent} session={asking} nowMs={nowMs} onAnswer={(answer) => onAnswerAsk(asking.id, answer)} />
               ) : (
-                <WorkingLine agent={agent} label={sessionStateLabel(asking, access).replace("Working · ", "")} />
+                <WorkingLine agent={agent} label={sessionStateLabel(asking, access)} />
               )}
               {asking.heard.map((heard) => (
                 <div key={heard} className="flex flex-col items-end gap-1">
@@ -217,13 +212,7 @@ export function AgentConversation({ agent, access, sessions, nowMs, header, onSe
         </div>
       </div>
       <div className="shrink-0 px-5 pb-4 pt-2">
-        <div className="mx-auto flex w-full max-w-[720px] flex-col gap-2">
-          {asking ? null : (
-            <div className="flex flex-wrap gap-2" data-testid="conversation-suggestions">
-              <Suggestion onClick={() => send("What do you remember?")} testId="suggest-memory">What do you remember?</Suggestion>
-              {agent.on || mine ? <Suggestion onClick={onRun} testId="suggest-run" icon={<Play className="size-3" aria-hidden />}>Run now</Suggestion> : null}
-            </div>
-          )}
+        <div className="mx-auto w-full max-w-[720px]">
           <Composer
             value={text}
             onChange={setText}
@@ -239,53 +228,60 @@ export function AgentConversation({ agent, access, sessions, nowMs, header, onSe
   );
 }
 
-function Suggestion({ children, onClick, testId, icon }: { children: string; onClick: () => void; testId: string; icon?: ReactNode }) {
+// What the agent says, in its own voice: its face, then plain text.
+export function AgentSays({ agent, children, testId }: { agent: Agent; children: ReactNode; testId?: string }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      data-testid={testId}
-      className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[#e0e1e6] bg-[#fcfcfd] px-3 text-[12px] text-[#60646c] transition-colors hover:bg-[#f0f0f3] hover:text-[#1c2024]"
-    >
-      {icon}
-      {children}
-    </button>
-  );
-}
-
-// The agent introduces itself: its job, where it lives as a file, and who pays.
-function AgentIntro({ agent, access }: { agent: Agent; access: Access }) {
-  const mine = isMine(agent);
-  const pays = agent.paidBy === "org" ? "The org's agent budget pays" : mine ? "It counts toward your own limit" : "Your use counts toward your own limit";
-  return (
-    <div className="flex flex-col gap-2 border-b border-[#f3f4f6] pb-5" data-testid="thread-intro">
-      <div className="flex items-center gap-2.5">
-        <AgentAvatar agent={agent} size={28} />
-        <span className="flex min-w-0 flex-col">
-          <span className="text-[14px] font-medium leading-5 text-[#1c2024]">{agent.name}</span>
-          <code className="truncate font-mono text-[12px] leading-4 text-[#8b8d98]" data-testid="thread-file">{agentFilePath(agent)}</code>
-        </span>
-      </div>
-      <p className="whitespace-pre-line text-[14px] leading-6 text-[#1c2024]" data-testid="thread-instructions">{agent.instructions || "Not set up yet."}</p>
-      <p className="text-[12px] leading-4 text-[#8b8d98]" data-testid="thread-terms">
-        {mine
-          ? `${routinesLine(agent)} · ${budgetLine(agent, access)} this month · ${pays}`
-          : `Your own conversation with it. ${firstNameOf(agent.owner)} never sees it. It uses your accounts · ${pays}`}
-      </p>
+    <div className="flex gap-2.5" data-testid={testId}>
+      <span className="pt-0.5"><AgentAvatar agent={agent} size={20} /></span>
+      <div className="min-w-0 flex-1 text-[14px] leading-6 text-[#1c2024]">{children}</div>
     </div>
   );
 }
 
-function WorkingLine({ agent, label }: { agent: Agent; label: string }) {
+// How the conversation opens. An agent made by telling it its job keeps that exchange at the top.
+// Any other agent says what it is for in one line.
+function AgentIntro({ agent }: { agent: Agent }) {
+  const mine = isMine(agent);
+  const first = agent.routines[0];
+  if (agent.said.length > 0 && mine) {
+    return (
+      <div className="flex flex-col gap-5" data-testid="thread-intro">
+        <UserBubble>{agent.said}</UserBubble>
+        {first ? <AgentSays agent={agent}>{planLine(agent, first.schedule)}</AgentSays> : null}
+        {first ? <SystemLine icon={Clock3} testId="thread-created">{`Created routine · ${first.name}`}</SystemLine> : null}
+        <AgentSays agent={agent} testId="thread-started">You're set. The first check is running now. I'll ask before I change anything in your apps.</AgentSays>
+      </div>
+    );
+  }
   return (
-    <p className="flex items-center gap-2 text-[14px] leading-5 text-[#8b8d98]" role="status" data-testid="working-line">
-      <span className="animate-pulse motion-reduce:animate-none"><AgentAvatar agent={agent} size={18} /></span>
+    <div className="flex flex-col items-center gap-1.5 pb-2 pt-4 text-center" data-testid="thread-intro">
+      <AgentAvatar agent={agent} size={40} />
+      <p className="pt-1 text-[14px] font-medium leading-5 text-[#1c2024]">{agent.name}</p>
+      <p className="max-w-[520px] whitespace-pre-line text-[13px] leading-5 text-[#60646c]" data-testid="thread-instructions">{agent.instructions || "Tell it what to do."}</p>
+      {mine ? null : (
+        <p className="text-[12px] leading-4 text-[#8b8d98]" data-testid="thread-terms">{`From ${firstNameOf(agent.owner)}. This conversation is yours alone, and it uses your own accounts.`}</p>
+      )}
+    </div>
+  );
+}
+
+export function WorkingLine({ agent, label }: { agent: Agent; label: string }) {
+  return (
+    <p className="flex items-center gap-2.5 text-[14px] leading-5 text-[#8b8d98]" role="status" data-testid="working-line">
+      <span className="animate-pulse motion-reduce:animate-none"><AgentAvatar agent={agent} size={20} /></span>
       {label}
     </p>
   );
 }
 
-function StepLogo({ connector }: { connector: RunStep["connector"] }) {
+function StepLogo({ connector }: { connector: RunStep["connector"] | AskItem["connector"] }) {
+  if (connector === "openwork") {
+    return (
+      <span className="grid size-6 shrink-0 place-items-center rounded-md border border-gray-200 bg-white">
+        <img src="/openwork-mark.svg" alt="" className="size-3.5" />
+      </span>
+    );
+  }
   if (connector === "workbot") return <ConnectorLogo name="Slack" url="https://slack.com" size="xs" />;
   const entry = connectorById(connector);
   return <ConnectorLogo name={entry.name} url={entry.url} size="xs" />;
@@ -294,15 +290,15 @@ function StepLogo({ connector }: { connector: RunStep["connector"] }) {
 export function RunSteps({ steps }: { steps: RunStep[] }) {
   if (steps.length === 0) return null;
   return (
-    <ul className="flex flex-col gap-1.5">
+    <ul className="flex flex-col gap-1" data-testid="run-steps">
       {steps.map((step) => (
         <li key={step.key} className="flex items-center gap-2.5 text-[13px] leading-5 text-[#60646c]" data-blocked={step.blocked ? "true" : "false"}>
-          <StepLogo connector={step.connector} />
+          <span className="grid size-6 shrink-0 place-items-center"><StepLogo connector={step.connector} /></span>
           <span className="min-w-0 flex-1">{step.label}</span>
           {step.blocked ? (
             <span className="inline-flex shrink-0 items-center gap-1 text-[12px] text-[#8b8d98]">
               <Lock className="size-3" aria-hidden />
-              {`${toolLabel(step.tool)}: ${step.blocked.toLowerCase()}`}
+              {step.blocked === "Not allowed" ? "Not allowed" : `${toolLabel(step.tool)}: ${step.blocked.toLowerCase()}`}
             </span>
           ) : null}
         </li>
@@ -311,141 +307,124 @@ export function RunSteps({ steps }: { steps: RunStep[] }) {
   );
 }
 
-// Steps fold into one line once a run is done.
-function StepsFold({ steps }: { steps: RunStep[] }) {
-  const [open, setOpen] = useState(false);
-  if (steps.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-2">
-      <button
-        type="button"
-        onClick={() => setOpen((current) => !current)}
-        aria-expanded={open}
-        className="flex w-fit items-center gap-1 text-[12px] text-[#8b8d98] transition-colors hover:text-[#1c2024]"
-        data-testid="run-steps-toggle"
-      >
-        <ChevronRight className={`size-3.5 transition-transform duration-150 motion-reduce:transition-none ${open ? "rotate-90" : ""}`} aria-hidden />
-        {`${steps.length} ${steps.length === 1 ? "step" : "steps"}`}
-      </button>
-      {open ? <RunSteps steps={steps} /> : null}
-    </div>
-  );
+// What it asked to do, and how that ended, as one small line.
+function askEnding(agent: Agent, wanted: RunAsk): string {
+  const one = wanted.items.length === 1 ? wanted.items[0] : undefined;
+  const what = one ? lowerFirst(one.action) : `do those ${wanted.items.length} things`;
+  if (wanted.state === "expired") return `Nobody answered in 30 minutes, so ${agent.name} didn't ${what}`;
+  if (wanted.state === "denied") return `You said no, so ${agent.name} didn't ${what}`;
+  return `${agent.name} can ${what} ${wanted.state === "always" ? "from now on" : "this time"}`;
 }
 
-function askEnding(wanted: RunAsk): string {
-  const action = lowerFirst(wanted.action);
-  if (wanted.state === "expired") return `It wanted to ${action}. Nobody answered within 30 minutes, so it didn't.`;
-  if (wanted.state === "denied") return `It wanted to ${action}. You said no, so it didn't.`;
-  if (wanted.state === "always") return `You let it ${action}, from now on.`;
-  return `You let it ${action}, this once.`;
-}
-
-// One result in the conversation. A routine's result can be talked about in its own thread.
-export function RunMessage({ agent, run, privately, replies, onThread, inThread = false }: {
+// One result in the conversation: a sentence or two. The steps behind it stay folded until asked for.
+export function RunMessage({ agent, run, replies, onThread, inThread = false }: {
   agent: Agent;
   run: AgentRun;
-  privately: boolean;
   replies: number;
   onThread: (() => void) | null;
   inThread?: boolean;
 }) {
-  const at = run.when;
-  const source = run.asked ? `Answered at ${at}${privately ? ", only to you" : ""}` : run.routine ? `${run.routine} · ${at}` : `Run now · ${at}`;
+  const [open, setOpen] = useState(inThread);
+  const source = run.asked ? null : run.routine ?? "Run now";
   const tone = run.outcome === "failed" || run.outcome === "over_budget" ? "text-[#9a4a00]" : run.outcome === "quiet" ? "text-[#60646c]" : "text-[#1c2024]";
+  const count = run.steps.length;
   return (
     <div className="flex flex-col gap-3" data-testid="thread-run" data-outcome={run.outcome} data-asked={run.asked ? "true" : "false"} data-routine={run.routine ?? ""}>
       {run.asked && !inThread ? <UserBubble>{run.asked}</UserBubble> : null}
       {run.heard && !inThread ? <UserBubble>{run.heard}</UserBubble> : null}
+      {run.wanted ? <SystemLine icon={ShieldCheck} testId="thread-run-ask">{askEnding(agent, run.wanted)}</SystemLine> : null}
       <div className="flex gap-2.5">
         <span className="pt-0.5"><AgentAvatar agent={agent} size={20} /></span>
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <p className="flex flex-wrap items-center gap-x-2 text-[12px] leading-5 text-[#8b8d98]">
-            <span className="font-medium text-[#60646c]" data-testid="thread-run-routine">{source}</span>
-            {run.costMicro > 0 ? <span className="font-mono tabular-nums">{formatWorkbotCost(run.costMicro)}</span> : null}
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <p className={`text-[14px] leading-6 ${tone}`} data-testid="thread-run-summary">{run.summary}</p>
+          <p className="flex flex-wrap items-center gap-x-1.5 text-[12px] leading-5 text-[#8b8d98]">
+            <span data-testid="thread-run-routine">{source ? `${source} · ${run.when}` : run.when}</span>
+            {count > 0 && !inThread ? (
+              <>
+                <span aria-hidden>·</span>
+                <button
+                  type="button"
+                  onClick={() => setOpen((current) => !current)}
+                  aria-expanded={open}
+                  data-testid="run-steps-toggle"
+                  className="inline-flex items-center gap-0.5 rounded transition-colors hover:text-[#1c2024]"
+                >
+                  {`${count} ${count === 1 ? "step" : "steps"}`}
+                  <ChevronRight className={`size-3.5 transition-transform duration-150 motion-reduce:transition-none ${open ? "rotate-90" : ""}`} aria-hidden />
+                </button>
+              </>
+            ) : null}
+            {onThread ? (
+              <>
+                <span aria-hidden>·</span>
+                <button type="button" onClick={onThread} data-testid="thread-reply" className="rounded transition-colors hover:text-[#1c2024]">
+                  {replies > 0 ? `${replies} ${replies === 1 ? "reply" : "replies"}` : "Reply"}
+                </button>
+              </>
+            ) : null}
           </p>
-          {inThread ? <RunSteps steps={run.steps} /> : <StepsFold steps={run.steps} />}
-          <p className={`text-[14px] leading-6 ${tone}`} data-testid="thread-run-summary">
-            {run.outcome === "quiet" && !run.stopped ? `Nothing to tell you. ${run.summary}` : run.summary}
-          </p>
-          {run.wanted ? (
-            <p className="flex items-start gap-1.5 text-[13px] leading-5 text-[#60646c]" data-testid="thread-run-ask" data-state={run.wanted.state}>
-              <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-              {askEnding(run.wanted)}
-            </p>
-          ) : null}
-          {onThread ? (
-            <button
-              type="button"
-              onClick={onThread}
-              data-testid="thread-reply"
-              className="flex w-fit items-center gap-1.5 rounded-md text-[12px] font-medium text-[#60646c] transition-colors hover:text-[#1c2024]"
-            >
-              {replies > 0 ? <MessageSquare className="size-3.5" aria-hidden /> : <CornerDownRight className="size-3.5" aria-hidden />}
-              {replies > 0 ? `${replies} ${replies === 1 ? "reply" : "replies"}` : "Reply in thread"}
-            </button>
-          ) : null}
+          {open ? <div className="pt-1"><RunSteps steps={run.steps} /></div> : null}
         </div>
       </div>
     </div>
   );
 }
 
-// Background work, inline, until it reports back.
+// Work going on in the background, as one quiet line until it reports back.
 function SessionLine({ agent, session, access, onOpen, onStop }: { agent: Agent; session: AgentSession; access: Access; onOpen: () => void; onStop: () => void }) {
   return (
-    <div className="flex items-center gap-2.5 rounded-xl border border-[#e0e1e6] px-3 py-2" data-testid="session-line" data-state={session.state}>
-      <span className={session.state === "working" ? "animate-pulse motion-reduce:animate-none" : "opacity-50"}><AgentAvatar agent={agent} size={18} /></span>
-      <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 flex-col text-left">
-        <span className="truncate text-[13px] font-medium leading-5 text-[#1c2024]">{session.label}</span>
-        <span className="truncate text-[12px] leading-4 text-[#8b8d98]">{sessionStateLabel(session, access)}</span>
+    <div className="flex items-center gap-2.5" data-testid="session-line" data-state={session.state}>
+      <span className={session.state === "working" ? "animate-pulse motion-reduce:animate-none" : "opacity-50"}><AgentAvatar agent={agent} size={20} /></span>
+      <button type="button" onClick={onOpen} className="min-w-0 flex-1 truncate text-left text-[14px] leading-5 text-[#8b8d98] transition-colors hover:text-[#60646c]" role="status">
+        {sessionStateLabel(session, access)}
       </button>
-      <AppButton variant="quiet" icon={Square} onClick={onStop} testId="session-stop">{session.state === "waiting" ? "Cancel" : "Stop"}</AppButton>
+      <button type="button" onClick={onStop} data-testid="session-stop" className="shrink-0 rounded px-1 text-[12px] font-medium text-[#8b8d98] transition-colors hover:text-[#1c2024]">
+        {session.state === "waiting" ? "Cancel" : "Stop"}
+      </button>
     </div>
   );
 }
 
-// It wants a tool it isn't allowed. Asked from the background, the question expires after 30 minutes.
-export function AskCard({ agent, session, nowMs, onAnswer, onThread }: {
+// The first time it wants to change something, it stops and asks, in the chat. Reading never asks.
+// Asked from the background, the question expires after 30 minutes and nothing is changed.
+export function AskCard({ agent, session, nowMs, onAnswer }: {
   agent: Agent;
   session: AgentSession;
   nowMs: number;
   onAnswer: (answer: RunAsk["state"]) => void;
-  onThread: (() => void) | null;
 }) {
   const ask = session.ask;
   if (!ask) return null;
-  const connector = connectorById(ask.connector);
   const left = Math.max(0, Math.ceil((ask.raisedMs + ASK_EXPIRES_MS - nowMs) / 60000));
+  const one = ask.items.length === 1 ? ask.items[0] : undefined;
   return (
-    <CardShell
-      icon={ShieldCheck}
-      title={`${agent.name} wants to ${lowerFirst(ask.action)}`}
-      testId="ask-card"
-      dataState="ask"
-      state="Needs your OK"
-      footer={(
-        <>
-          <AppButton onClick={() => onAnswer("allowed")} testId="ask-allow-once">Allow once</AppButton>
-          <AppButton variant="secondary" onClick={() => onAnswer("always")} testId="ask-always">Always allow</AppButton>
+    <div className="flex flex-col gap-1.5 pl-[30px]">
+      <section className="flex w-full max-w-[560px] flex-col gap-3 rounded-2xl border border-[#e0e1e6] bg-[#fcfcfd] p-4" data-testid="ask-card" data-state="ask" data-tools={ask.items.map((item) => item.tool).join(",")}>
+        <h3 className="text-[14px] font-medium leading-5 text-[#1c2024]">{one ? `Let ${agent.name} ${lowerFirst(one.action)}?` : `Let ${agent.name} do this?`}</h3>
+        {one ? null : (
+          <ul className="flex flex-col gap-1">
+            {ask.items.map((item) => (
+              <li key={`${item.connector}-${item.tool}`} className="flex items-center gap-2.5 text-[14px] leading-5 text-[#1c2024]" data-testid="ask-item">
+                <span className="grid size-6 shrink-0 place-items-center"><StepLogo connector={item.connector} /></span>
+                {item.action}
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="text-[12px] leading-4 text-[#8b8d98]">It uses your own accounts. You can change this any time in its settings.</p>
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <AppButton variant="quiet" onClick={() => onAnswer("denied")} testId="ask-deny">Deny</AppButton>
-          {onThread ? <span className="ml-auto"><AppButton variant="quiet" onClick={onThread} testId="ask-thread">Open thread</AppButton></span> : null}
-        </>
-      )}
-    >
-      <div className="flex flex-col gap-2">
-        <CardRow label="For">{session.kind === "ask" ? "Your message" : session.label}</CardRow>
-        <CardRow label="Does">
-          <span className="inline-flex items-center gap-2">
-            <ConnectorLogo name={connector.name} url={connector.url} size="xs" />
-            {`Writes in ${connector.name}, as you. It isn't allowed this today.`}
-          </span>
-        </CardRow>
-        <CardRow label="Always allow">{`Adds “${toolLabel(ask.tool)}” to what it can use. You can block it again in its settings.`}</CardRow>
-        {ask.background ? (
-          <CardRow label="No answer">{`Expires at ${clockAt(ask.raisedMs + ASK_EXPIRES_MS)}${left > 0 ? `, in ${left} min` : ""}. Then it skips this and nothing is written.`}</CardRow>
-        ) : null}
-      </div>
-    </CardShell>
+          <AppButton variant="secondary" onClick={() => onAnswer("always")} testId="ask-always">Always allow</AppButton>
+          <AppButton onClick={() => onAnswer("allowed")} testId="ask-allow-once">Allow once</AppButton>
+        </div>
+      </section>
+      {/* Only once it has waited a while: someone answering at once doesn't need to hear about the deadline. */}
+      {ask.background && left <= 28 ? (
+        <p className="max-w-[560px] px-1 text-[12px] leading-4 text-[#8b8d98]" data-testid="ask-expiry">
+          {`If you don't answer by ${clockAt(ask.raisedMs + ASK_EXPIRES_MS)}, it skips this and changes nothing.`}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -462,8 +441,8 @@ function MemoryAnswer({ agent, onForget }: { agent: Agent; onForget: (noteId: st
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <p className="text-[14px] leading-6 text-[#1c2024]">
             {kept.length === 0
-              ? "Nothing beyond my job yet. Tell me something here and I'll keep it in mind on every run."
-              : `Besides my job, I keep ${kept.length === 1 ? "this" : `these ${kept.length} things`} in mind on every run${shared ? ", for everyone who uses me" : ""}:`}
+              ? "Nothing beyond my job yet. Tell me something here and I'll keep it in mind every time."
+              : `Besides my job, I keep ${kept.length === 1 ? "this" : `these ${kept.length} things`} in mind every time${shared ? ", for everyone who uses me" : ""}:`}
           </p>
           {kept.length > 0 ? (
             <ul className="flex flex-col divide-y divide-[#f3f4f6] rounded-xl border border-[#e0e1e6]">
@@ -495,7 +474,7 @@ function NoteExchange({ agent, note, onAnswer }: { agent: Agent; note: AgentNote
           {note.forEveryone ? (
             <NoteCard agent={agent} note={note} onAnswer={onAnswer} />
           ) : (
-            <p className="text-[14px] leading-6 text-[#1c2024]">Got it. I'll keep that in mind on every run.</p>
+            <p className="text-[14px] leading-6 text-[#1c2024]">Got it. I'll keep that in mind every time.</p>
           )}
         </div>
       </div>
@@ -537,7 +516,7 @@ function NoteCard({ agent, note, onAnswer }: { agent: Agent; note: AgentNote; on
 
 export function SidePanel({ label, title, onClose, children, footer, testId, wide = false }: {
   label: string;
-  title: ReactNode;
+  title?: ReactNode;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
@@ -607,18 +586,18 @@ export function ThreadPanel({ agent, access, run, session, nowMs, onReply, onMov
           onChange={setText}
           onSubmit={() => { onReply(text.trim()); setText(""); }}
           placeholder="Reply about this result"
-          note="Only the conversation changes what it remembers, its skills or its routines."
+          note="A reply here is about this result only."
         />
       ) : undefined}
     >
       <div ref={scroller} className="flex flex-col gap-5 px-4 py-4">
-        {run ? <RunMessage agent={agent} run={run} privately={!isMine(agent)} replies={0} onThread={null} inThread /> : null}
+        {run ? <RunMessage agent={agent} run={run} replies={0} onThread={null} inThread /> : null}
         {session ? (
           <div className="flex flex-col gap-3" data-testid="thread-live" data-state={session.state}>
-            <p className="text-[12px] leading-4 text-[#8b8d98]">{`A fresh session · started ${session.run.when}`}</p>
+            <p className="text-[12px] leading-4 text-[#8b8d98]">{`Started ${session.run.when}`}</p>
             <RunSteps steps={session.run.steps.slice(0, session.shown)} />
             {session.state === "needs_you" && session.ask ? (
-              <AskCard agent={agent} session={session} nowMs={nowMs} onAnswer={onAnswerAsk} onThread={null} />
+              <AskCard agent={agent} session={session} nowMs={nowMs} onAnswer={onAnswerAsk} />
             ) : (
               <WorkingLine agent={agent} label={sessionStateLabel(session, access)} />
             )}
@@ -648,12 +627,13 @@ export function ThreadPanel({ agent, access, run, session, nowMs, onReply, onMov
 }
 
 // ---------------------------------------------------------------------------
-// Details: what it's doing now, its routines, what it costs. Settings sit in the next tab.
+// Details: a glance. Is it on, when does it work next, what is it doing now.
+// Everything else (tools, budget, where it works, sharing, its file) is in Settings.
 // ---------------------------------------------------------------------------
 
 export type DetailsTab = "activity" | "settings";
 
-export function DetailsPanel({ agent, access, sessions, tab, onTab, onClose, onToggle, onRoutine, onRun, onOpenThread, settings }: {
+export function DetailsPanel({ agent, access, sessions, tab, onTab, onClose, onToggle, onRename, onRun, onOpenThread, settings }: {
   agent: Agent;
   access: Access;
   sessions: AgentSession[];
@@ -661,7 +641,7 @@ export function DetailsPanel({ agent, access, sessions, tab, onTab, onClose, onT
   onTab: (tab: DetailsTab) => void;
   onClose: () => void;
   onToggle: (on: boolean) => void;
-  onRoutine: (routineId: string, on: boolean) => void;
+  onRename: (name: string) => void;
   onRun: () => void;
   onOpenThread: (id: string) => void;
   settings: ReactNode;
@@ -672,26 +652,20 @@ export function DetailsPanel({ agent, access, sessions, tab, onTab, onClose, onT
       testId="settings-panel"
       wide={tab === "settings"}
       onClose={onClose}
-      title={(
-        <div className="flex items-center gap-1 rounded-full bg-[#f0f0f3] p-0.5" role="tablist" aria-label={`${agent.name} details`}>
-          {(["activity", "settings"] as const).map((entry) => (
-            <button
-              key={entry}
-              type="button"
-              role="tab"
-              aria-selected={tab === entry}
-              onClick={() => onTab(entry)}
-              data-testid={`details-tab-${entry}`}
-              className={`h-7 rounded-full px-3 text-[12px] font-medium transition-colors ${tab === entry ? "bg-white text-[#1c2024] shadow-[0_1px_2px_rgba(15,23,42,0.08)]" : "text-[#60646c] hover:text-[#1c2024]"}`}
-            >
-              {entry === "activity" ? "Activity" : "Settings"}
-            </button>
-          ))}
-        </div>
-      )}
+      title={tab === "settings" ? (
+        <button
+          type="button"
+          onClick={() => onTab("activity")}
+          data-testid="details-back"
+          className="-ml-2 flex h-8 items-center gap-1.5 rounded-lg px-2 text-[13px] font-medium text-[#1c2024] transition-colors hover:bg-[#f0f0f3]"
+        >
+          <ArrowLeft className="size-4 text-[#60646c]" aria-hidden />
+          Settings
+        </button>
+      ) : undefined}
     >
       {tab === "activity" ? (
-        <Activity agent={agent} access={access} sessions={sessions} onToggle={onToggle} onRoutine={onRoutine} onRun={onRun} onOpenThread={onOpenThread} />
+        <Glance agent={agent} access={access} sessions={sessions} onToggle={onToggle} onRename={onRename} onRun={onRun} onOpenThread={onOpenThread} onSettings={() => onTab("settings")} />
       ) : (
         <div className="px-4 py-4" data-testid="settings-scroll">{settings}</div>
       )}
@@ -699,113 +673,116 @@ export function DetailsPanel({ agent, access, sessions, tab, onTab, onClose, onT
   );
 }
 
-function PanelSection({ title, meta, children, testId }: { title: string; meta?: string; children: ReactNode; testId: string }) {
+// The name is a text box in place: click it, type, done. Nobody has to name an agent before it exists.
+function NameField({ agent, onRename }: { agent: Agent; onRename: (name: string) => void }) {
+  const [name, setName] = useState(agent.name);
+  useEffect(() => setName(agent.name), [agent.name]);
+  const save = () => {
+    const next = name.trim();
+    if (next.length === 0) setName(agent.name);
+    else if (next !== agent.name) onRename(next);
+  };
   return (
-    <section className="flex flex-col gap-1 border-t border-[#f3f4f6] px-4 py-3 first:border-t-0" data-testid={testId}>
-      <div className="flex min-h-6 items-center justify-between gap-3">
-        <h3 className="text-[12px] font-medium text-[#8b8d98]">{title}</h3>
-        {meta ? <span className="text-[12px] text-[#8b8d98]">{meta}</span> : null}
-      </div>
-      {children}
-    </section>
+    <input
+      value={name}
+      maxLength={40}
+      aria-label="Name"
+      onChange={(event) => setName(event.target.value)}
+      onBlur={save}
+      onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+      data-testid="details-name"
+      className="h-8 w-full max-w-[260px] rounded-lg bg-transparent px-2 text-center text-[15px] font-medium text-[#1c2024] outline-none transition-colors hover:bg-[#f0f0f3] focus:bg-[#f0f0f3]"
+    />
   );
 }
 
-function Activity({ agent, access, sessions, onToggle, onRoutine, onRun, onOpenThread }: {
+function GlanceLabel({ children }: { children: string }) {
+  return <h3 className="px-1 pb-1.5 pt-4 text-[12px] font-medium text-[#8b8d98]">{children}</h3>;
+}
+
+function Glance({ agent, access, sessions, onToggle, onRename, onRun, onOpenThread, onSettings }: {
   agent: Agent;
   access: Access;
   sessions: AgentSession[];
   onToggle: (on: boolean) => void;
-  onRoutine: (routineId: string, on: boolean) => void;
+  onRename: (name: string) => void;
   onRun: () => void;
   onOpenThread: (id: string) => void;
+  onSettings: () => void;
 }) {
   const mine = isMine(agent);
-  const steers = canChange(agent);
   const role = roleOf(agent) ?? "collaborator";
-  const busy = sessions.filter((session) => session.state !== "waiting" && session.kind !== "ask").length;
-  const budget = effectiveBudget(agent, access);
-  const today = agent.runs.filter((run) => run.today && !run.asked);
   const over = overBudget(agent, access);
-  const status = !agent.on ? (mine ? "Paused" : "Off for you") : over ? "Over budget" : "On";
-  const where = [agent.runsOn.cloud ? "OpenWork Cloud" : null, ...MY_COMPUTERS.filter((computer) => agent.runsOn.computers.includes(computer.id)).map((computer) => computer.name)].filter(Boolean);
+  const fresh = agent.setup !== null;
+  const status = fresh ? "Not started yet" : !agent.on ? (mine ? "Paused" : "Off for you") : over ? "Over budget" : "On";
+  const line = fresh
+    ? "Tell it what to do in the chat."
+    : !agent.on
+      ? mine ? "It does nothing until you turn it on." : "You can still ask it things."
+      : over ? "It works again next month, or when its budget is raised in Settings." : `${nextRunText(agent)}.`;
   return (
-    <div className="flex flex-col pb-4" data-testid="details-activity">
-      <PanelSection title={mine ? "Status" : `Shared by ${personName(agent.owner)} · ${ROLE_LABEL[role]}`} testId="details-status">
-        <div className="flex min-h-10 items-center justify-between gap-3">
-          <span className="flex min-w-0 flex-col">
-            <span className="text-[14px] font-medium leading-5 text-[#1c2024]" data-testid="details-status-title">{status}</span>
-            <span className="text-[12px] leading-4 text-[#8b8d98]">{agent.on ? `${nextRunText(agent)}.` : mine ? "Runs nothing until you turn it on." : "You can still ask it things."}</span>
-          </span>
-          <AppSwitch checked={agent.on} onChange={onToggle} label={mine ? agent.name : `Run ${agent.name}'s routines for me`} testId="agent-on" />
+    <div className="flex flex-col px-4 pb-4" data-testid="details-activity">
+      <div className="flex flex-col items-center gap-1 pb-2 pt-6">
+        <AgentAvatar agent={agent} size={56} />
+        <div className="flex w-full justify-center pt-2">
+          {mine ? <NameField agent={agent} onRename={onRename} /> : <p className="flex h-8 items-center text-[15px] font-medium text-[#1c2024]" data-testid="details-name">{agent.name}</p>}
         </div>
-      </PanelSection>
+        {mine ? null : <p className="text-[12px] leading-4 text-[#8b8d98]">{`From ${personName(agent.owner)} · ${ROLE_LABEL[role]}`}</p>}
+      </div>
 
-      <PanelSection title="Working now" meta={`${busy} of ${access.atOnce} at once`} testId="details-sessions">
-        {sessions.length === 0 ? <p className="py-1.5 text-[13px] leading-5 text-[#60646c]">Nothing running.</p> : null}
-        {sessions.map((session) => (
-          <button
-            key={session.id}
-            type="button"
-            onClick={() => onOpenThread(session.id)}
-            className="flex min-h-10 items-center gap-2.5 rounded-lg px-1 text-left transition-colors hover:bg-[#f9f9fb]"
-            data-testid="details-session"
-            data-state={session.state}
-          >
-            <span className={`size-2 shrink-0 rounded-full ${session.state === "needs_you" ? "bg-[#E8933A]" : session.state === "working" ? "animate-pulse bg-[#0090ff] motion-reduce:animate-none" : "bg-[#d9d9e0]"}`} />
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-[13px] leading-5 text-[#1c2024]">{session.label}</span>
-              <span className="truncate text-[12px] leading-4 text-[#8b8d98]">{sessionStateLabel(session, access)}</span>
-            </span>
-          </button>
-        ))}
-        <span className="pt-1"><AppButton variant="secondary" icon={Play} onClick={onRun} testId="thread-run-now">Run now</AppButton></span>
-      </PanelSection>
+      <div className="mt-3 flex min-h-14 items-center justify-between gap-3 rounded-2xl border border-[#e0e1e6] px-3.5 py-2.5" data-testid="details-status">
+        <span className="flex min-w-0 flex-col">
+          <span className="text-[14px] font-medium leading-5 text-[#1c2024]" data-testid="details-status-title">{status}</span>
+          <span className="text-[12px] leading-4 text-[#8b8d98]">{line}</span>
+        </span>
+        <AppSwitch checked={agent.on} onChange={onToggle} label={mine ? agent.name : `Run ${agent.name}'s routines for me`} testId="agent-on" />
+      </div>
 
-      <PanelSection title="Routines" meta={agent.routines.length > 0 ? String(agent.routines.length) : undefined} testId="details-routines">
-        {agent.routines.length === 0 ? <p className="py-1.5 text-[13px] leading-5 text-[#60646c]">None. Ask in the conversation to set one up.</p> : null}
+      <GlanceLabel>Routines</GlanceLabel>
+      <div className="flex flex-col divide-y divide-[#f3f4f6] rounded-2xl border border-[#e0e1e6]" data-testid="details-routines">
+        {agent.routines.length === 0 ? <p className="px-3.5 py-3 text-[13px] leading-5 text-[#60646c]">None yet. Tell it when to work, in the chat.</p> : null}
         {agent.routines.map((routine) => (
-          <div key={routine.id} className="flex min-h-10 items-center justify-between gap-3" data-testid={`details-routine-${routine.id}`} data-on={routine.on ? "true" : "false"}>
+          <div key={routine.id} className="flex min-h-12 items-center gap-3 px-3.5 py-2" data-testid={`details-routine-${routine.id}`} data-on={routine.on ? "true" : "false"}>
+            <Clock3 className="size-4 shrink-0 text-[#8b8d98]" aria-hidden />
             <span className="flex min-w-0 flex-col">
               <span className={`truncate text-[13px] leading-5 ${routine.on ? "text-[#1c2024]" : "text-[#8b8d98]"}`}>{routine.name}</span>
-              <span className="truncate text-[12px] leading-4 text-[#8b8d98]">{routine.on ? routineWhen(routine) : steers ? "Paused" : `Paused by ${firstNameOf(agent.owner)}`}</span>
+              <span className="truncate text-[12px] leading-4 text-[#8b8d98]">{routineWhen(routine)}</span>
             </span>
-            {steers ? <AppSwitch checked={routine.on} onChange={(on) => onRoutine(routine.id, on)} label={routine.name} testId={`details-routine-on-${routine.id}`} /> : null}
           </div>
         ))}
-        {!mine && agent.routines.length > 0 ? <p className="text-[12px] leading-4 text-[#8b8d98]">They run for you only while it's on for you, with your own accounts.</p> : null}
-      </PanelSection>
+      </div>
 
-      <PanelSection title="This month" meta={agent.paidBy === "org" ? "Org pays" : "You pay"} testId="details-budget">
-        <p className="text-[13px] leading-5 text-[#1c2024]">
-          <span className="font-mono tabular-nums">{budgetLine(agent, access)}</span>
-          {budget !== null ? <span className="text-[#8b8d98]">{isShared(agent.share, agent.owner) ? " · per person" : ""}</span> : null}
-        </p>
-        {budget !== null ? (
-          <span className="mt-1 h-1.5 overflow-hidden rounded-full bg-[#f0f0f3]" aria-hidden>
-            <span className={`block h-full rounded-full ${over ? "bg-[#E8933A]" : "bg-[#1c2024]"}`} style={{ width: `${Math.min(100, Math.round((agent.spentMicro / Math.max(1, budget)) * 100))}%` }} />
-          </span>
-        ) : null}
-      </PanelSection>
+      {sessions.length > 0 ? (
+        <>
+          <GlanceLabel>Working now</GlanceLabel>
+          <div className="flex flex-col divide-y divide-[#f3f4f6] rounded-2xl border border-[#e0e1e6]" data-testid="details-sessions">
+            {sessions.map((session) => (
+              <button
+                key={session.id}
+                type="button"
+                onClick={() => onOpenThread(session.id)}
+                className="flex min-h-12 items-center gap-3 px-3.5 py-2 text-left transition-colors first:rounded-t-2xl last:rounded-b-2xl hover:bg-[#f9f9fb]"
+                data-testid="details-session"
+                data-state={session.state}
+              >
+                <span className={`size-2 shrink-0 rounded-full ${session.state === "needs_you" ? "bg-[#E8933A]" : session.state === "working" ? "animate-pulse bg-[#0090ff] motion-reduce:animate-none" : "bg-[#d9d9e0]"}`} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-[13px] leading-5 text-[#1c2024]">{session.label}</span>
+                  <span className="truncate text-[12px] leading-4 text-[#8b8d98]">{sessionStateLabel(session, access)}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
 
-      <PanelSection title="Where it works" testId="details-where">
-        <p className="text-[13px] leading-5 text-[#1c2024]">{where.length > 0 ? where.join(", ") : "Nowhere yet"}</p>
-        {access.cloudOnly ? <p className="inline-flex items-center gap-1 text-[12px] leading-4 text-[#8b8d98]"><Lock className="size-3" aria-hidden />Your admin allows OpenWork Cloud only</p> : null}
-      </PanelSection>
-
-      <PanelSection title="Done today" meta={today.length > 0 ? String(today.length) : undefined} testId="details-done">
-        {today.length === 0 ? <p className="py-1.5 text-[13px] leading-5 text-[#60646c]">No runs today.</p> : null}
-        {today.slice(0, 4).map((run) => (
-          <button key={run.id} type="button" onClick={() => onOpenThread(run.id)} className="flex min-h-9 items-center gap-2.5 rounded-lg px-1 text-left transition-colors hover:bg-[#f9f9fb]" data-testid="details-done-run">
-            <span className="size-2 shrink-0 rounded-full bg-[#d9d9e0]" />
-            <span className="min-w-0 flex-1 truncate text-[13px] leading-5 text-[#1c2024]">{run.routine ?? "Run now"}</span>
-            <span className="shrink-0 text-[12px] text-[#8b8d98]">{run.when}</span>
-          </button>
-        ))}
-      </PanelSection>
+      <div className="flex items-center gap-2 pt-4">
+        {fresh ? null : <AppButton variant="secondary" icon={Play} onClick={onRun} testId="thread-run-now">Run now</AppButton>}
+        <AppButton variant="quiet" icon={Settings2} onClick={onSettings} testId="details-settings">Settings</AppButton>
+      </div>
 
       {!mine ? (
-        <p className="px-4 pt-1 text-[12px] leading-4 text-[#8b8d98]">{`Used by ${peopleLabel(sharedPeople(agent.share, agent.owner).length + 1)}. Each person has their own conversation.`}</p>
+        <p className="px-1 pt-4 text-[12px] leading-4 text-[#8b8d98]">{`Used by ${peopleLabel(sharedPeople(agent.share, agent.owner).length + 1)}. Each person has their own conversation.`}</p>
       ) : null}
     </div>
   );

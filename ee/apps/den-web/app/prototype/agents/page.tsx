@@ -8,14 +8,13 @@ import { DesktopApp, type DesktopView } from "./desktop";
 import {
   type Access,
   type Agent,
-  type AgentColor,
   type AgentSession,
   type ChatCard,
   type ChatTurn,
   type ConnectorId,
   type RunAsk,
   type Scenario,
-  type SetupStepId,
+  type Schedule,
   DEFAULT_ACCESS,
   DEFAULT_CONNECTED,
   ME,
@@ -23,7 +22,6 @@ import {
   ASK_EXPIRES_MS,
   agentFromDraft,
   canChange,
-  answerSetup,
   applyRun,
   changesTheAgent,
   clockNow,
@@ -36,10 +34,10 @@ import {
   isMemoryQuestion,
   isMine,
   keepManagers,
-  noTools,
   noteAsksFirst,
   sampleAgents,
   settleRun,
+  startAgent,
   startSession,
   stoppedRun,
   toolsForLevel,
@@ -63,7 +61,7 @@ function seedSessions(agents: Agent[]): AgentSession[] {
   if (!agent || !routine) return [];
   const now = Date.now();
   const session = startSession(agent, DEFAULT_ACCESS, DEFAULT_CONNECTED, { id: "run-seed", when: clockAt(now - 6 * 60 * 1000), kind: "routine", routine, nowMs: now - 6 * 60 * 1000, working: true });
-  return [{ ...session, state: session.ask ? "needs_you" : "working", shown: session.run.steps.length }];
+  return [{ ...session, state: session.ask ? "needs_you" : "working", shown: session.ask ? session.ask.at : session.run.steps.length }];
 }
 
 function clockAt(ms: number): string {
@@ -129,10 +127,7 @@ export default function AgentsPrototypePage() {
       nextAgents = nextAgents.map((agent) => {
         if (agent.id !== session.agentId) return agent;
         const run = stopped ? stoppedRun(session) : settleRun(agent, session, answer);
-        const allowed = answer === "always" && session.ask
-          ? { ...agent.tools, [session.ask.connector]: [...agent.tools[session.ask.connector], session.ask.tool] }
-          : agent.tools;
-        return applyRun({ ...agent, tools: allowed }, run);
+        return applyRun(agent, run);
       });
     }
     setAgents(nextAgents);
@@ -155,11 +150,12 @@ export default function AgentsPrototypePage() {
           changed = true;
         } else if (session.state !== "working") {
           rest.push(session);
+        } else if (session.ask && session.shown >= session.ask.at) {
+          // It got to the first thing it may not do yet, so it stops there and asks.
+          rest.push({ ...session, state: "needs_you", ask: { ...session.ask, raisedMs: now } });
+          changed = true;
         } else if (session.shown < session.run.steps.length) {
           rest.push({ ...session, shown: session.shown + 1 });
-          changed = true;
-        } else if (session.ask) {
-          rest.push({ ...session, state: "needs_you", ask: { ...session.ask, raisedMs: now } });
           changed = true;
         } else {
           done.push({ session, answer: null });
@@ -173,8 +169,8 @@ export default function AgentsPrototypePage() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const begin = (agentId: string, kind: AgentSession["kind"], options: { routineId?: string; asked?: string } = {}) => {
-    const agent = agents.find((entry) => entry.id === agentId);
+  const begin = (agentId: string, kind: AgentSession["kind"], options: { routineId?: string; asked?: string; as?: Agent } = {}) => {
+    const agent = options.as ?? agents.find((entry) => entry.id === agentId);
     if (!agent) return;
     const routine = agent.routines.find((entry) => entry.id === options.routineId);
     const busy = sessions.filter((session) => session.agentId === agentId && session.kind !== "ask" && session.state !== "waiting").length;
@@ -230,10 +226,26 @@ export default function AgentsPrototypePage() {
     else finish([{ session, answer: null, stopped: true }], rest);
   };
 
+  // Yes lets it carry on from where it stopped. "Always allow" also keeps those tools for next time. No ends the run there.
   const answerAsk = (sessionId: string, answer: RunAsk["state"]) => {
     const session = sessions.find((entry) => entry.id === sessionId);
-    if (!session) return;
-    finish([{ session, answer }], sessions.filter((entry) => entry.id !== sessionId));
+    const agent = agents.find((entry) => entry.id === session?.agentId);
+    if (!session || !agent || !session.ask) return;
+    if (answer !== "allowed" && answer !== "always") {
+      finish([{ session, answer }], sessions.filter((entry) => entry.id !== sessionId));
+      return;
+    }
+    if (answer === "always") {
+      const tools = { ...agent.tools };
+      let sessionTools = agent.openwork.sessions;
+      for (const item of session.ask.items) {
+        if (item.connector === "openwork") sessionTools = [...sessionTools, item.tool];
+        else tools[item.connector] = [...tools[item.connector], item.tool];
+      }
+      patchAgent(agent.id, { tools, openwork: { ...agent.openwork, sessions: sessionTools } });
+    }
+    const run = settleRun(agent, session, answer);
+    setSessions((current) => current.map((entry) => (entry.id === sessionId ? { ...entry, run, ask: null, state: "working" } : entry)));
   };
 
   // A message in the conversation. While it works, a message goes first and changes its course.
@@ -308,24 +320,33 @@ export default function AgentsPrototypePage() {
     setDesktopView({ kind: "agent", agentId: id, panel: "settings", thread: null });
   };
 
-  // A new agent is a named draft. It opens in its own thread, where the first message is its job.
-  const createAgent = (name: string, color: AgentColor) => {
+  // A new agent is a chat with nothing in it yet. Its first message is its job, and it names itself from that.
+  const createAgent = () => {
     if (agents.filter(isMine).length >= access.maxAgents) return;
     const id = nextId("agent");
-    setAgents((current) => [...current, { ...draftAgent(id, name, access), color }]);
+    setAgents((current) => [...current, draftAgent(id, access, current.filter(isMine).map((agent) => agent.color))]);
     markThreadRead();
     setDesktopView({ kind: "agent", agentId: id, panel: null, thread: null });
   };
 
-  // Saying the job again starts the setup cards over, so they match what was said last.
+  // Saying the job again replaces it. A short message that only says when changes how often.
   const giveJobTo = (agentId: string, text: string) => {
-    setAgents((current) => current.map((agent) => (agent.id === agentId && agent.setup
-      ? giveJob({ ...agent, tools: noTools(), routines: [], setup: { ...agent.setup, answered: {} } }, text, access)
+    setAgents((current) => current.map((agent) => (agent.id === agentId
+      ? giveJob(agent, text, current.filter((entry) => entry.id !== agentId && isMine(entry)).map((entry) => entry.name))
       : agent)));
   };
 
-  const answerSetupFor = (agentId: string, step: SetupStepId, answer: "done" | "skipped", patch?: Partial<Agent>) => {
-    setAgents((current) => current.map((agent) => (agent.id === agentId ? answerSetup(agent, step, answer, patch) : agent)));
+  const askOften = (agentId: string, asking: "start" | "often") => {
+    setAgents((current) => current.map((agent) => (agent.id === agentId && agent.setup ? { ...agent, setup: { ...agent.setup, asking } } : agent)));
+  };
+
+  // Starting it turns it on and does a first check at once, so the first result is one answer away.
+  const startAgentFor = (agentId: string, schedule?: Schedule) => {
+    const agent = agents.find((entry) => entry.id === agentId);
+    if (!agent?.setup) return;
+    const started = startAgent(agent, access, schedule);
+    setAgents((current) => current.map((entry) => (entry.id === agentId ? started : entry)));
+    begin(agentId, "routine", { routineId: started.routines[0]?.id, as: started });
   };
 
   // A manager is always someone the agent is shared with.
@@ -474,7 +495,8 @@ export default function AgentsPrototypePage() {
           onConnect={(id) => setConnected((current) => ({ ...current, [id]: true }))}
           onCreate={createAgent}
           onJob={giveJobTo}
-          onSetup={answerSetupFor}
+          onAskOften={askOften}
+          onStart={startAgentFor}
         />
       )}
     </div>
