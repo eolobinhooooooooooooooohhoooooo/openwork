@@ -80,6 +80,17 @@ const searchTracker = (token: string) => den.callMcpTool(token, "search_capabili
 const capability = (tool: string) => `mcp:${trackerId}:${tool}`
 const searchApi = (token: string, query: string) => den.callMcpTool(token, "search_capabilities", { query, type: "api", limit: 20 })
 
+async function connectInstructions(token: string): Promise<string> {
+  const started = await den.request(token, "POST", "/mcp/agent", {
+    headers: { accept: "application/json, text/event-stream" },
+    body: { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fixture", version: "1" } } },
+  })
+  assert.equal(started.status, 200, summary(started))
+  const line = started.text.split("\n").find((entry) => entry.startsWith("data:"))
+  const envelope: unknown = line ? JSON.parse(line.slice(5)) : started.body
+  return text(field(envelope, "result", "instructions"), "instructions")
+}
+
 async function connectionTools(token: string): Promise<string[]> {
   const searched = await den.request(token, "POST", `/mcp/agent/connections/${trackerId}`, {
     headers: { accept: "application/json, text/event-stream" },
@@ -121,6 +132,7 @@ test("with the flag off, personal agents do not exist for the organization: no r
   const called = await den.callMcpTool(token, "execute_capability", { name: "listPersonalAgents" })
   assert.equal(called.isError, true, called.raw)
   assert.equal(field(called.body, "error"), "unknown_capability")
+  assert.equal((await connectInstructions(token)).includes("createPersonalAgent"), false, "a chat is not told about agents it cannot make")
 })
 
 test("ordinary Automations carry no agent fields, before and after the flag is on", async () => {
@@ -154,6 +166,7 @@ test("Dana creates an agent from chat through OpenWork Connect, lists it, and an
   const token = await den.mintMcpToken(dana, orgId)
   const found = await den.callMcpTool(token, "search_capabilities", { query: "create personal agent", type: "api", limit: 20 })
   assert.ok(names(found).includes("createPersonalAgent"), found.raw)
+  assert.match(await connectInstructions(token), /make it now instead of proposing an Automation: createPersonalAgent/, "the chat is told to make an agent when asked for one")
 
   const created = await den.callMcpTool(token, "execute_capability", { name: "createPersonalAgent", body: { name: "Bug watcher", brief: BRIEF } })
   assert.equal(created.isError, false, created.raw)
@@ -334,6 +347,7 @@ test("a tool the agent's policy blocks is withheld from its next run, and only f
   assert.deepEqual((await connectionTools(runToken)).sort(), ["create_issue", "list_bug_reports"], "the connection served on its own leaves the tool out too")
 
   // A limited run cannot lift its own limits or start work that would run without them.
+  assert.equal((await connectInstructions(runToken)).includes("createPersonalAgent"), false)
   const offered = [
     ...names(await searchApi(runToken, "update personal agent tool policy")),
     ...names(await searchApi(runToken, "create cloud automation run now")),

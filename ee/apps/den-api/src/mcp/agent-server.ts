@@ -67,12 +67,15 @@ const SLACK_SEND_AS_BOT_INSTRUCTIONS = "To notify the user or \"send me\" someth
 
 export const MY_AGENT_INSTRUCTIONS = "To change what Your agent tells the user (\"also watch our Render bill\", \"never tell me about newsletters\": lines added to their brief), what it reads (\"also use Linear\", \"use my Granola for meeting context\": any connector they can use, by name in `sources`) or how often it checks, use putMeAgent; to explain why it was quiet or when it checks next, read the user's agent and its checks."
 
+export const PERSONAL_AGENT_INSTRUCTIONS = "When the person asks for an agent of their own (\"make me an agent that watches #bugs and files issues every morning\"), make it now instead of proposing an Automation: createPersonalAgent with a name and a Markdown brief written from what they said, then createPersonalAgentRoutine for its schedule and what each run does. \"Run it now\" is runPersonalAgentNow, then getAutomationRun until the run finishes; \"my agents\" is listPersonalAgents. Say agent and routine, never capability names or ids."
+
 export function createAgentMcpServer(options: {
   appServers?: boolean
   remoteSessionStatus?: boolean
   remoteSessionEvents?: boolean
   canSendSlackMessages?: boolean
   myAgent?: boolean
+  personalAgents?: boolean
   harnessFeedbackInstructions?: string
   skillsExtension?: boolean
   nativeEvents?: boolean
@@ -83,7 +86,8 @@ export function createAgentMcpServer(options: {
     ...(options.remoteSessionStatus && options.remoteSessionEvents ? [REMOTE_SESSION_EVENT_INSTRUCTIONS] : []),
     ...(options.canSendSlackMessages ? [SLACK_SEND_AS_BOT_INSTRUCTIONS] : []),
     ...(options.harnessFeedbackInstructions ? [options.harnessFeedbackInstructions] : []),
-    ...(options.myAgent ? [MY_AGENT_INSTRUCTIONS] : [])].join("\n")
+    ...(options.myAgent ? [MY_AGENT_INSTRUCTIONS] : []),
+    ...(options.personalAgents ? [PERSONAL_AGENT_INSTRUCTIONS] : [])].join("\n")
   const skillIndex = options.skills ? skillIndexInstructions(options.skills, AGENT_MCP_INSTRUCTIONS_MAX_CHARS - listed.length - 1) : ""
   const server = new McpServer({
     name: "openwork-den-api-agent",
