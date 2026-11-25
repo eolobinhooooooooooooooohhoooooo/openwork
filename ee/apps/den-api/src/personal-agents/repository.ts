@@ -29,6 +29,7 @@ function mapAgent(row: AgentRow): PersonalAgent {
     createdAt: row.created_at.getTime(),
     updatedAt: row.updated_at.getTime(),
     archivedAt: row.archived_at?.getTime() ?? null,
+    pausedAt: row.paused_at?.getTime() ?? null,
   }
 }
 

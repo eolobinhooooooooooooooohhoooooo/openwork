@@ -4,7 +4,9 @@ import {
   automationExecutionTargetSchema,
   automationModelSchema,
   automationRunSchema,
+  automationRunStatusSchema,
   automationScheduleSchema,
+  automationStateSchema,
 } from "@openwork/types/automations"
 
 const idSchema = z.string().trim().min(1).max(160)
@@ -20,7 +22,11 @@ export const PERSONAL_AGENT_TOOL_POLICY_MAX_BLOCKED = 200
 /** Every block is one scope on the run's credential, which stores at most 64 KiB of them. */
 export const PERSONAL_AGENT_TOOL_POLICY_MAX_SCOPE_CHARACTERS = 32_000
 
-export const personalAgentAccessSchema = z.enum(["allow", "block"]).meta({ ref: "PersonalAgentAccess" })
+/**
+ * "ask" lets a run see the tool but not use it until a person says yes: the
+ * call is refused and a request waits in the agent's chat.
+ */
+export const personalAgentAccessSchema = z.enum(["allow", "ask", "block"]).meta({ ref: "PersonalAgentAccess" })
 export type PersonalAgentAccess = z.infer<typeof personalAgentAccessSchema>
 
 const connectionIdSchema = z.string().trim().min(1).max(160)
@@ -30,10 +36,11 @@ const toolNameSchema = z.string().min(1).max(128).refine((name) => !LONE_SURROGA
 /**
  * What an agent may use of its owner's connections while it runs unattended.
  *
- * An agent starts with every connection its owner has, like an Automation.
- * `connections` blocks a whole connection; `tools` blocks single tools of a
- * connection that stays allowed. A blocked connection wins over its tools.
- * "allow" entries record an explicit choice and change nothing.
+ * An agent starts with every connection the person it runs for has. A tool
+ * that only reads is allowed; a tool that can change something asks first.
+ * `connections` blocks a whole connection; `tools` sets single tools of a
+ * connection that stays allowed to allow, ask or block. A blocked connection
+ * wins over its tools.
  */
 export const personalAgentToolPolicySchema = z.object({
   connections: z.record(connectionIdSchema, personalAgentAccessSchema).default({}),
@@ -68,6 +75,36 @@ export const personalAgentMonthlyBudgetSchema = z.number().int().nonnegative().m
 export const personalAgentStateSchema = z.enum(["active", "archived"]).meta({ ref: "PersonalAgentState" })
 export type PersonalAgentState = z.infer<typeof personalAgentStateSchema>
 
+export const personalAgentRoleSchema = z.enum(["owner", "manager", "collaborator"]).meta({ ref: "PersonalAgentRole" })
+export type PersonalAgentRole = z.infer<typeof personalAgentRoleSchema>
+
+/** What an owner can give a teammate. A manager changes the agent's job; a collaborator uses it and asks for changes. */
+export const personalAgentShareRoleSchema = z.enum(["manager", "collaborator"]).meta({ ref: "PersonalAgentShareRole" })
+export type PersonalAgentShareRole = z.infer<typeof personalAgentShareRoleSchema>
+
+export const personalAgentPersonSchema = z.object({
+  memberId: idSchema,
+  name: z.string().max(240),
+}).meta({ ref: "PersonalAgentPerson" })
+export type PersonalAgentPerson = z.infer<typeof personalAgentPersonSchema>
+
+export const personalAgentShareSchema = personalAgentPersonSchema.extend({
+  role: personalAgentShareRoleSchema,
+  createdAt: timestampSchema,
+}).meta({ ref: "PersonalAgentShare" })
+export type PersonalAgentShare = z.infer<typeof personalAgentShareSchema>
+
+export const personalAgentShareListSchema = z.object({
+  owner: personalAgentPersonSchema,
+  items: z.array(personalAgentShareSchema),
+}).meta({ ref: "PersonalAgentShareList" })
+export type PersonalAgentShareList = z.infer<typeof personalAgentShareListSchema>
+
+export const setPersonalAgentShareSchema = z.object({
+  role: personalAgentShareRoleSchema,
+}).strict().meta({ ref: "SetPersonalAgentShare" })
+export type SetPersonalAgentShare = z.infer<typeof setPersonalAgentShareSchema>
+
 export const personalAgentSchema = z.object({
   id: idSchema,
   organizationId: idSchema,
@@ -78,6 +115,8 @@ export const personalAgentSchema = z.object({
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
   archivedAt: timestampSchema.nullable(),
+  pausedAt: timestampSchema.nullable().default(null)
+    .describe("Set while an organization admin has paused the agent: nothing of it runs until it is resumed."),
 }).meta({ ref: "PersonalAgent" })
 export type PersonalAgent = z.infer<typeof personalAgentSchema>
 
@@ -94,10 +133,49 @@ export const personalAgentRevisionSchema = z.object({
 }).meta({ ref: "PersonalAgentRevision" })
 export type PersonalAgentRevision = z.infer<typeof personalAgentRevisionSchema>
 
+export const personalAgentRoutineSummarySchema = z.object({
+  id: idSchema,
+  name: z.string().max(120),
+  state: automationStateSchema,
+  schedule: automationScheduleSchema,
+  nextDueAt: timestampSchema.nullable(),
+  latestRun: z.object({
+    id: idSchema,
+    status: automationRunStatusSchema,
+    createdAt: timestampSchema,
+    finishedAt: timestampSchema.nullable(),
+  }).nullable(),
+}).meta({ ref: "PersonalAgentRoutineSummary" })
+export type PersonalAgentRoutineSummary = z.infer<typeof personalAgentRoutineSummarySchema>
+
+/**
+ * What an agent has cost this calendar month (UTC) and the most it may cost.
+ * `unpricedTokens` counts tokens of runs whose price is not known; they are
+ * not in `monthMicros`.
+ */
+export const personalAgentSpendSchema = z.object({
+  monthMicros: z.number().int().nonnegative(),
+  unpricedTokens: z.number().int().nonnegative(),
+  budgetMicros: personalAgentMonthlyBudgetSchema.nullable()
+    .describe("The limit that applies: the lowest of the owner's, the admin's for this agent and the organization's."),
+  ownerBudgetMicros: personalAgentMonthlyBudgetSchema.nullable(),
+  adminBudgetMicros: personalAgentMonthlyBudgetSchema.nullable(),
+  overBudget: z.boolean(),
+}).meta({ ref: "PersonalAgentSpend" })
+export type PersonalAgentSpend = z.infer<typeof personalAgentSpendSchema>
+
+const NO_SPEND: PersonalAgentSpend = { monthMicros: 0, unpricedTokens: 0, budgetMicros: null, ownerBudgetMicros: null, adminBudgetMicros: null, overBudget: false }
+
 export const personalAgentDetailSchema = z.object({
   agent: personalAgentSchema,
   revision: personalAgentRevisionSchema,
   routineCount: z.number().int().nonnegative(),
+  role: personalAgentRoleSchema.default("owner").describe("What the caller may do with this agent."),
+  owner: personalAgentPersonSchema.nullable().default(null),
+  sharedWith: z.array(personalAgentShareSchema).default([]),
+  routines: z.array(personalAgentRoutineSummarySchema).default([]),
+  spend: personalAgentSpendSchema.default(NO_SPEND),
+  openRequestCount: z.number().int().nonnegative().default(0),
 }).meta({ ref: "PersonalAgentDetail" })
 export type PersonalAgentDetail = z.infer<typeof personalAgentDetailSchema>
 
@@ -107,12 +185,27 @@ export const personalAgentListSchema = z.object({
 }).meta({ ref: "PersonalAgentList" })
 export type PersonalAgentList = z.infer<typeof personalAgentListSchema>
 
+/**
+ * Something the person said the agent must never do, in their words: an app
+ * ("Slack") and optionally an action ("post message"). Den turns each into
+ * Block entries of the tool policy; an action it cannot match blocks every
+ * tool of that app that can change something.
+ */
+export const personalAgentNeverSchema = z.object({
+  app: z.string().trim().min(1).max(80),
+  action: z.string().trim().min(1).max(120).optional(),
+}).strict().meta({ ref: "PersonalAgentNever" })
+export type PersonalAgentNever = z.infer<typeof personalAgentNeverSchema>
+
 export const createPersonalAgentSchema = z.object({
   name: z.string().trim().min(1).max(PERSONAL_AGENT_NAME_MAX_LENGTH),
   brief: personalAgentBriefSchema,
   toolPolicy: personalAgentToolPolicySchema.optional(),
+  never: z.array(personalAgentNeverSchema).max(20).optional(),
   defaultExecutionTarget: automationExecutionTargetSchema.optional(),
   monthlyBudgetMicros: personalAgentMonthlyBudgetSchema.nullable().optional(),
+  idempotencyKey: z.string().trim().min(8).max(128).optional()
+    .describe("Sending the same key again returns the agent the first request made instead of making another."),
 }).strict().meta({ ref: "CreatePersonalAgent" })
 export type CreatePersonalAgent = z.infer<typeof createPersonalAgentSchema>
 
@@ -158,6 +251,7 @@ export type PersonalAgentRoutineList = z.infer<typeof personalAgentRoutineListSc
 export const personalAgentProposalSchema = z.object({
   name: z.string().trim().min(1).max(PERSONAL_AGENT_NAME_MAX_LENGTH),
   brief: personalAgentBriefSchema,
+  never: z.array(personalAgentNeverSchema).max(20).optional(),
   routine: z.object({
     name: z.string().trim().min(1).max(120),
     instructions: z.string().trim().min(1).max(PERSONAL_AGENT_ROUTINE_INSTRUCTIONS_MAX_LENGTH),
@@ -178,3 +272,192 @@ export const personalAgentRunResponseSchema = z.object({
   agentRevision: personalAgentRevisionSchema.pick({ id: true, version: true }),
 }).meta({ ref: "PersonalAgentRunResponse" })
 export type PersonalAgentRunResponse = z.infer<typeof personalAgentRunResponseSchema>
+
+/** A change to a routine, by someone who may change the agent's job. `active: false` pauses the routine. */
+export const updatePersonalAgentRoutineSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  instructions: z.string().trim().min(1).max(PERSONAL_AGENT_ROUTINE_INSTRUCTIONS_MAX_LENGTH).optional(),
+  schedule: automationScheduleSchema.optional(),
+  active: z.boolean().optional(),
+}).strict().refine((input) => Object.keys(input).length > 0, "At least one field is required")
+  .meta({ ref: "UpdatePersonalAgentRoutine" })
+export type UpdatePersonalAgentRoutine = z.infer<typeof updatePersonalAgentRoutineSchema>
+
+export const personalAgentRunListSchema = z.object({
+  items: z.array(automationRunSchema),
+}).meta({ ref: "PersonalAgentRunList" })
+export type PersonalAgentRunList = z.infer<typeof personalAgentRunListSchema>
+
+export const personalAgentChatSchema = z.object({
+  agentId: idSchema,
+  workspaceId: z.string().trim().min(1).max(240),
+  sessionId: z.string().trim().min(1).max(240),
+  updatedAt: timestampSchema,
+}).meta({ ref: "PersonalAgentChat" })
+export type PersonalAgentChat = z.infer<typeof personalAgentChatSchema>
+
+export const personalAgentChatResponseSchema = z.object({
+  chat: personalAgentChatSchema.nullable(),
+}).meta({ ref: "PersonalAgentChatResponse" })
+export type PersonalAgentChatResponse = z.infer<typeof personalAgentChatResponseSchema>
+
+export const setPersonalAgentChatSchema = z.object({
+  workspaceId: z.string().trim().min(1).max(240),
+  sessionId: z.string().trim().min(1).max(240),
+}).strict().meta({ ref: "SetPersonalAgentChat" })
+export type SetPersonalAgentChat = z.infer<typeof setPersonalAgentChatSchema>
+
+/** What a collaborator asks to change. A schedule or instructions change names the routine unless the agent has one. */
+export const personalAgentChangeSchema = z.object({
+  routineId: idSchema.optional(),
+  schedule: automationScheduleSchema.optional(),
+  instructions: z.string().trim().min(1).max(PERSONAL_AGENT_ROUTINE_INSTRUCTIONS_MAX_LENGTH).optional(),
+  brief: personalAgentBriefSchema.optional(),
+}).strict().refine((change) => Boolean(change.schedule || change.instructions || change.brief), "Say what to change")
+  .meta({ ref: "PersonalAgentChange" })
+export type PersonalAgentChange = z.infer<typeof personalAgentChangeSchema>
+
+export const personalAgentRequestKindSchema = z.enum(["tool", "change"]).meta({ ref: "PersonalAgentRequestKind" })
+export type PersonalAgentRequestKind = z.infer<typeof personalAgentRequestKindSchema>
+
+export const personalAgentRequestStatusSchema = z.enum(["pending", "denied", "allowed_once", "always_allowed", "approved", "used"])
+  .meta({ ref: "PersonalAgentRequestStatus" })
+export type PersonalAgentRequestStatus = z.infer<typeof personalAgentRequestStatusSchema>
+
+/**
+ * Something waiting on a person. kind "tool": a run was refused a tool until
+ * someone allows it. kind "change": a collaborator asked for a change to the
+ * agent's job.
+ */
+export const personalAgentRequestSchema = z.object({
+  id: idSchema,
+  agentId: idSchema,
+  kind: personalAgentRequestKindSchema,
+  status: personalAgentRequestStatusSchema,
+  requestedBy: personalAgentPersonSchema,
+  runId: idSchema.nullable(),
+  connectionId: z.string().max(160).nullable(),
+  connectionName: z.string().max(160).nullable(),
+  toolName: z.string().max(128).nullable(),
+  toolTitle: z.string().max(240).nullable(),
+  summary: z.string().max(500).nullable(),
+  change: personalAgentChangeSchema.nullable(),
+  decidedBy: personalAgentPersonSchema.nullable(),
+  decidedAt: timestampSchema.nullable(),
+  createdAt: timestampSchema,
+  canDecide: z.array(z.enum(["deny", "allow_once", "always_allow", "approve"]))
+    .describe("The decisions the caller may make on this request; empty when it is not theirs to decide or already decided."),
+}).meta({ ref: "PersonalAgentRequest" })
+export type PersonalAgentRequest = z.infer<typeof personalAgentRequestSchema>
+
+export const personalAgentRequestListSchema = z.object({
+  items: z.array(personalAgentRequestSchema),
+}).meta({ ref: "PersonalAgentRequestList" })
+export type PersonalAgentRequestList = z.infer<typeof personalAgentRequestListSchema>
+
+export const createPersonalAgentChangeRequestSchema = z.object({
+  summary: z.string().trim().min(1).max(500).describe("The change in one plain sentence, as the person asked for it."),
+  change: personalAgentChangeSchema,
+}).strict().meta({ ref: "CreatePersonalAgentChangeRequest" })
+export type CreatePersonalAgentChangeRequest = z.infer<typeof createPersonalAgentChangeRequestSchema>
+
+export const personalAgentRequestDecisionSchema = z.enum(["deny", "allow_once", "always_allow", "approve"])
+  .meta({ ref: "PersonalAgentRequestDecision" })
+export type PersonalAgentRequestDecision = z.infer<typeof personalAgentRequestDecisionSchema>
+
+export const decidePersonalAgentRequestSchema = z.object({
+  decision: personalAgentRequestDecisionSchema,
+}).strict().meta({ ref: "DecidePersonalAgentRequest" })
+export type DecidePersonalAgentRequest = z.infer<typeof decidePersonalAgentRequestSchema>
+
+export const personalAgentToolSchema = z.object({
+  name: z.string().max(128),
+  title: z.string().max(240),
+  write: z.boolean().describe("False only when the connector says the tool reads and cannot destroy."),
+  access: personalAgentAccessSchema.describe("What applies to a run now."),
+  chosen: personalAgentAccessSchema.nullable().describe("What the agent's own policy says for this tool, if anything."),
+  lockedByOrganization: z.boolean().describe("An admin blocked it for every agent; the agent's policy cannot change that."),
+}).meta({ ref: "PersonalAgentTool" })
+export type PersonalAgentTool = z.infer<typeof personalAgentToolSchema>
+
+export const personalAgentConnectionToolsSchema = z.object({
+  connectionId: idSchema,
+  name: z.string().max(160),
+  available: z.boolean().describe("Whether the caller is connected to it. Tools are listed only then."),
+  blocked: z.boolean().describe("The agent's policy blocks the whole connection."),
+  lockedByOrganization: z.boolean(),
+  tools: z.array(personalAgentToolSchema),
+}).meta({ ref: "PersonalAgentConnectionTools" })
+export type PersonalAgentConnectionTools = z.infer<typeof personalAgentConnectionToolsSchema>
+
+export const personalAgentToolCatalogSchema = z.object({
+  connections: z.array(personalAgentConnectionToolsSchema),
+}).meta({ ref: "PersonalAgentToolCatalog" })
+export type PersonalAgentToolCatalog = z.infer<typeof personalAgentToolCatalogSchema>
+
+/** Small facts about a change, for the list of who changed what. Never a brief or tool arguments. */
+export const personalAgentEventDetailSchema = z.record(z.string().max(64), z.union([z.string().max(240), z.number(), z.boolean(), z.null()]))
+export type PersonalAgentEventDetail = z.infer<typeof personalAgentEventDetailSchema>
+
+export const personalAgentEventSchema = z.object({
+  id: idSchema,
+  agentId: idSchema.nullable(),
+  agentName: z.string().max(PERSONAL_AGENT_NAME_MAX_LENGTH).nullable(),
+  actor: personalAgentPersonSchema,
+  action: z.string().max(64),
+  detail: personalAgentEventDetailSchema,
+  createdAt: timestampSchema,
+}).meta({ ref: "PersonalAgentEvent" })
+export type PersonalAgentEvent = z.infer<typeof personalAgentEventSchema>
+
+export const personalAgentEventListSchema = z.object({
+  items: z.array(personalAgentEventSchema),
+}).meta({ ref: "PersonalAgentEventList" })
+export type PersonalAgentEventList = z.infer<typeof personalAgentEventListSchema>
+
+/** What an organization allows every agent. `toolPolicy` holds only blocks. */
+export const personalAgentOrgPolicySchema = z.object({
+  toolPolicy: personalAgentToolPolicySchema,
+  monthlyBudgetMicros: personalAgentMonthlyBudgetSchema.nullable()
+    .describe("The most one agent may spend in a month, whatever its owner chose."),
+}).meta({ ref: "PersonalAgentOrgPolicy" })
+export type PersonalAgentOrgPolicy = z.infer<typeof personalAgentOrgPolicySchema>
+
+export const setPersonalAgentOrgPolicySchema = z.object({
+  toolPolicy: personalAgentToolPolicySchema.optional(),
+  monthlyBudgetMicros: personalAgentMonthlyBudgetSchema.nullable().optional(),
+}).strict().refine((input) => Object.keys(input).length > 0, "At least one field is required")
+  .meta({ ref: "SetPersonalAgentOrgPolicy" })
+export type SetPersonalAgentOrgPolicy = z.infer<typeof setPersonalAgentOrgPolicySchema>
+
+/** One agent as an organization admin sees it. Never its brief. */
+export const personalAgentAdminItemSchema = z.object({
+  agent: personalAgentSchema,
+  owner: personalAgentPersonSchema,
+  sharedWith: z.array(personalAgentShareSchema),
+  writeAccess: z.object({
+    allowed: z.number().int().nonnegative(),
+    ask: z.number().int().nonnegative(),
+    blocked: z.number().int().nonnegative(),
+  }).describe("How many tools its policy names as allow, ask and block."),
+  spend: personalAgentSpendSchema,
+  routines: z.array(personalAgentRoutineSummarySchema),
+}).meta({ ref: "PersonalAgentAdminItem" })
+export type PersonalAgentAdminItem = z.infer<typeof personalAgentAdminItemSchema>
+
+export const personalAgentAdminListSchema = z.object({
+  items: z.array(personalAgentAdminItemSchema),
+  policy: personalAgentOrgPolicySchema,
+  monthMicros: z.number().int().nonnegative().describe("What every agent in the organization has cost this month."),
+}).meta({ ref: "PersonalAgentAdminList" })
+export type PersonalAgentAdminList = z.infer<typeof personalAgentAdminListSchema>
+
+export const setPersonalAgentAdminBudgetSchema = z.object({
+  monthlyBudgetMicros: personalAgentMonthlyBudgetSchema.nullable(),
+}).strict().meta({ ref: "SetPersonalAgentAdminBudget" })
+export type SetPersonalAgentAdminBudget = z.infer<typeof setPersonalAgentAdminBudgetSchema>
+
+export const transferPersonalAgentSchema = z.object({
+  memberId: idSchema.describe("The member who becomes the owner. They must be in the organization."),
+}).strict().meta({ ref: "TransferPersonalAgent" })
+export type TransferPersonalAgent = z.infer<typeof transferPersonalAgentSchema>

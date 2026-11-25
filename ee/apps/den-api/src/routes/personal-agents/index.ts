@@ -26,6 +26,9 @@ import { invalidRequestSchema, jsonResponse, notFoundSchema } from "../../openap
 import { personalAgentService, type PersonalAgentService } from "../../personal-agents/service.js"
 import type { AuthContextVariables } from "../../session.js"
 import { automationRouteFailure } from "../automations/index.js"
+import { registerPersonalAgentAdminRoutes } from "./admin.js"
+import { registerPersonalAgentPermissionsRoutes } from "./permissions.js"
+import { registerPersonalAgentSharingRoutes } from "./sharing.js"
 
 const idParamsSchema = z.object({ id: z.string().min(1).max(160) })
 const paginationSchema = z.object({
@@ -275,4 +278,7 @@ export function registerPersonalAgentRoutes<T extends { Variables: RouteVariable
       }
     },
   )
+  registerPersonalAgentSharingRoutes(app, gate)
+  registerPersonalAgentPermissionsRoutes(app, gate)
+  registerPersonalAgentAdminRoutes(app, gate)
 }

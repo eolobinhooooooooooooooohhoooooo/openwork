@@ -1,6 +1,6 @@
 import { relations, sql } from "drizzle-orm"
 import { bigint, index, int, mysqlEnum, mysqlTable, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core"
-import type { PersonalAgentToolPolicy } from "@openwork/types/den/personal-agents"
+import type { PersonalAgentChange, PersonalAgentEventDetail, PersonalAgentToolPolicy } from "@openwork/types/den/personal-agents"
 import { compatJsonColumn, denTypeIdColumn, encryptedMediumTextColumn, timestamps } from "../columns"
 
 /**
@@ -18,10 +18,111 @@ export const PersonalAgentTable = mysqlTable(
     state: mysqlEnum("state", ["active", "archived"]).notNull().default("active"),
     current_revision_id: denTypeIdColumn("personalAgentRevision", "current_revision_id").notNull(),
     archived_at: timestamp("archived_at", { fsp: 3 }),
+    paused_at: timestamp("paused_at", { fsp: 3 }),
+    paused_by_member_id: denTypeIdColumn("member", "paused_by_member_id"),
+    admin_monthly_budget_micros: bigint("admin_monthly_budget_micros", { mode: "number", unsigned: true }),
+    created_by_member_id: denTypeIdColumn("member", "created_by_member_id"),
+    idempotency_key: varchar("idempotency_key", { length: 128 }),
     ...timestamps,
   },
   (table) => [
     index("personal_agent_org_owner_state").on(table.organization_id, table.owner_member_id, table.state),
+    uniqueIndex("personal_agent_idempotency").on(table.organization_id, table.created_by_member_id, table.idempotency_key),
+  ],
+)
+
+/** Who else may use an agent, and how far. The owner is not listed here. */
+export const PersonalAgentShareTable = mysqlTable(
+  "personal_agent_share",
+  {
+    id: denTypeIdColumn("personalAgentShare", "id").notNull().primaryKey(),
+    organization_id: denTypeIdColumn("organization", "organization_id").notNull(),
+    agent_id: denTypeIdColumn("personalAgent", "agent_id").notNull(),
+    member_id: denTypeIdColumn("member", "member_id").notNull(),
+    role: mysqlEnum("role", ["manager", "collaborator"]).notNull(),
+    created_by_member_id: denTypeIdColumn("member", "created_by_member_id").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("personal_agent_share_member").on(table.agent_id, table.member_id),
+    index("personal_agent_share_org_member").on(table.organization_id, table.member_id),
+  ],
+)
+
+/**
+ * Something an agent or a collaborator is waiting on a person for: a tool a
+ * run was refused until someone says yes, or a change to the agent's job.
+ */
+export const PersonalAgentRequestTable = mysqlTable(
+  "personal_agent_request",
+  {
+    id: denTypeIdColumn("personalAgentRequest", "id").notNull().primaryKey(),
+    organization_id: denTypeIdColumn("organization", "organization_id").notNull(),
+    agent_id: denTypeIdColumn("personalAgent", "agent_id").notNull(),
+    kind: mysqlEnum("kind", ["tool", "change"]).notNull(),
+    status: mysqlEnum("status", ["pending", "denied", "allowed_once", "always_allowed", "approved", "used"]).notNull().default("pending"),
+    requested_by_member_id: denTypeIdColumn("member", "requested_by_member_id").notNull(),
+    run_id: denTypeIdColumn("automationRun", "run_id"),
+    used_by_run_id: denTypeIdColumn("automationRun", "used_by_run_id"),
+    connection_id: varchar("connection_id", { length: 160 }),
+    connection_name: varchar("connection_name", { length: 160 }),
+    tool_name: varchar("tool_name", { length: 128 }),
+    tool_title: varchar("tool_title", { length: 240 }),
+    summary: varchar("summary", { length: 500 }),
+    change: compatJsonColumn<PersonalAgentChange | null>("change"),
+    decided_by_member_id: denTypeIdColumn("member", "decided_by_member_id"),
+    decided_at: timestamp("decided_at", { fsp: 3 }),
+    ...timestamps,
+  },
+  (table) => [
+    index("personal_agent_request_agent_status").on(table.agent_id, table.status),
+  ],
+)
+
+/** Which desktop chat a member uses for an agent, per workspace, so it follows them. A pointer, never a transcript. */
+export const PersonalAgentChatTable = mysqlTable(
+  "personal_agent_chat",
+  {
+    id: denTypeIdColumn("personalAgentChat", "id").notNull().primaryKey(),
+    organization_id: denTypeIdColumn("organization", "organization_id").notNull(),
+    agent_id: denTypeIdColumn("personalAgent", "agent_id").notNull(),
+    member_id: denTypeIdColumn("member", "member_id").notNull(),
+    workspace_id: varchar("workspace_id", { length: 240 }).notNull(),
+    session_id: varchar("session_id", { length: 240 }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("personal_agent_chat_member_workspace").on(table.agent_id, table.member_id, table.workspace_id),
+  ],
+)
+
+/** What an organization allows every agent: tools no agent may use, and the most one agent may spend in a month. */
+export const PersonalAgentOrgPolicyTable = mysqlTable(
+  "personal_agent_org_policy",
+  {
+    organization_id: denTypeIdColumn("organization", "organization_id").notNull().primaryKey(),
+    tool_policy: compatJsonColumn<PersonalAgentToolPolicy>("tool_policy").notNull(),
+    monthly_budget_micros: bigint("monthly_budget_micros", { mode: "number", unsigned: true }),
+    updated_by_member_id: denTypeIdColumn("member", "updated_by_member_id").notNull(),
+    ...timestamps,
+  },
+)
+
+/** Who changed what about an agent. Never holds a brief, tool arguments or credentials. */
+export const PersonalAgentEventTable = mysqlTable(
+  "personal_agent_event",
+  {
+    id: denTypeIdColumn("personalAgentEvent", "id").notNull().primaryKey(),
+    organization_id: denTypeIdColumn("organization", "organization_id").notNull(),
+    agent_id: denTypeIdColumn("personalAgent", "agent_id"),
+    actor_member_id: denTypeIdColumn("member", "actor_member_id").notNull(),
+    action: varchar("action", { length: 64 }).notNull(),
+    detail: compatJsonColumn<PersonalAgentEventDetail>("detail").notNull(),
+    created_at: timestamp("created_at", { fsp: 3 }).notNull().default(sql`CURRENT_TIMESTAMP(3)`),
+  },
+  (table) => [
+    index("personal_agent_event_org_created").on(table.organization_id, table.created_at),
+    index("personal_agent_event_agent").on(table.agent_id, table.created_at),
   ],
 )
 

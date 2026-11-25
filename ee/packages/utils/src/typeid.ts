@@ -157,6 +157,10 @@ export const idTypesMapNameToPrefix = {
   automationShare: "ats",
   personalAgent: "pga",
   personalAgentRevision: "pgv",
+  personalAgentShare: "pgs",
+  personalAgentRequest: "pgq",
+  personalAgentChat: "pgc",
+  personalAgentEvent: "pge",
 } as const
 
 export const denTypeIdPrefixes = idTypesMapNameToPrefix

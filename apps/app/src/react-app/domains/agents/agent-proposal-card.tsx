@@ -1,8 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Clock } from "lucide-react";
+import { Clock } from "lucide-react";
 
 import { parsePersonalAgentProposal } from "@/components/tools/openwork-automation-proposal";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { SessionProposalCardProps } from "@/react-app/kernel/session-extensions";
 import { t } from "@/i18n";
 
@@ -91,7 +90,7 @@ export function AgentProposalCard(props: SessionProposalCardProps) {
       </p>
       <AgentChoices
         title={t("agents.start_question")}
-        description={failed ?? (runtime ? t("agents.start_effect", { name: proposal.name, routine: proposal.routine.name }) : t("agents.start_sign_in"))}
+        description={failed ?? (runtime ? null : t("agents.start_sign_in"))}
         choices={[
           {
             id: "start",
@@ -103,18 +102,6 @@ export function AgentProposalCard(props: SessionProposalCardProps) {
           { id: "else", label: t("agents.start_else"), muted: true, disabled: start.isPending || props.readOnly, onSelect: () => props.setPrompt("") },
         ]}
       />
-      <Collapsible className="max-w-[560px] text-xs text-dls-secondary">
-        <CollapsibleTrigger data-agent-proposal-details className="group/details flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 hover:text-dls-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <ChevronRight aria-hidden="true" className="size-3 transition-transform group-data-panel-open/details:rotate-90" />
-          {t("agents.start_details")}
-        </CollapsibleTrigger>
-        <CollapsibleContent className="flex flex-col gap-2 px-1 pt-2">
-          <p className="font-medium text-dls-text">{t("agents.start_brief")}</p>
-          <p className="whitespace-pre-wrap">{proposal.brief}</p>
-          <p className="font-medium text-dls-text">{t("agents.start_instructions", { routine: proposal.routine.name })}</p>
-          <p className="whitespace-pre-wrap">{proposal.routine.instructions}</p>
-        </CollapsibleContent>
-      </Collapsible>
     </div>
   );
 }

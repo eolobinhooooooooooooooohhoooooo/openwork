@@ -11,12 +11,24 @@ import {
 } from "@openwork/types/automations";
 import type {
   CreatePersonalAgent,
+  CreatePersonalAgentChangeRequest,
   CreatePersonalAgentRoutine,
+  PersonalAgentChatResponse,
   PersonalAgentDetail,
   PersonalAgentList,
+  PersonalAgentRequest,
+  PersonalAgentRequestDecision,
+  PersonalAgentRequestList,
   PersonalAgentRoutineList,
+  PersonalAgentRunList,
   PersonalAgentRunResponse,
+  PersonalAgentShareList,
+  PersonalAgentShareRole,
+  PersonalAgentToolCatalog,
   RunPersonalAgentNow,
+  SetPersonalAgentChat,
+  UpdatePersonalAgent,
+  UpdatePersonalAgentRoutine,
 } from "@openwork/types/den/personal-agents";
 import type { GatewayAuthorizationRequest, GatewayProviderSummary } from "@openwork/types/den/gateway";
 import { parseGatewayUsableModel } from "./gateway-usable-model";
@@ -3552,6 +3564,82 @@ export function createDenClient(options: {
         baseUrls,
         `/v1/personal-agents/${encodeURIComponent(agentId)}/run`,
         { method: "POST", token, organizationId: orgId, body: input },
+      );
+    },
+
+    async updatePersonalAgent(orgId: string, agentId: string, input: UpdatePersonalAgent): Promise<PersonalAgentDetail> {
+      return requestJson<PersonalAgentDetail>(baseUrls, `/v1/personal-agents/${encodeURIComponent(agentId)}`, { method: "PATCH", token, organizationId: orgId, body: input });
+    },
+
+    async updatePersonalAgentRoutine(orgId: string, agentId: string, routineId: string, input: UpdatePersonalAgentRoutine): Promise<AutomationDetail> {
+      return requestJson<AutomationDetail>(
+        baseUrls,
+        `/v1/personal-agents/${encodeURIComponent(agentId)}/routines/${encodeURIComponent(routineId)}`,
+        { method: "PATCH", token, organizationId: orgId, body: input },
+      );
+    },
+
+    async listPersonalAgentRuns(orgId: string, agentId: string, limit = 10): Promise<PersonalAgentRunList> {
+      return requestJson<PersonalAgentRunList>(baseUrls, `/v1/personal-agents/${encodeURIComponent(agentId)}/runs?limit=${limit}`, { method: "GET", token, organizationId: orgId });
+    },
+
+    async getPersonalAgentRun(orgId: string, agentId: string, runId: string): Promise<AutomationRunReceipt> {
+      return requestJson<AutomationRunReceipt>(
+        baseUrls,
+        `/v1/personal-agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(runId)}`,
+        { method: "GET", token, organizationId: orgId },
+      );
+    },
+
+    async listPersonalAgentShares(orgId: string, agentId: string): Promise<PersonalAgentShareList> {
+      return requestJson<PersonalAgentShareList>(baseUrls, `/v1/personal-agents/${encodeURIComponent(agentId)}/shares`, { method: "GET", token, organizationId: orgId });
+    },
+
+    async setPersonalAgentShare(orgId: string, agentId: string, memberId: string, role: PersonalAgentShareRole): Promise<PersonalAgentShareList> {
+      return requestJson<PersonalAgentShareList>(
+        baseUrls,
+        `/v1/personal-agents/${encodeURIComponent(agentId)}/shares/${encodeURIComponent(memberId)}`,
+        { method: "PUT", token, organizationId: orgId, body: { role } },
+      );
+    },
+
+    async removePersonalAgentShare(orgId: string, agentId: string, memberId: string): Promise<PersonalAgentShareList> {
+      return requestJson<PersonalAgentShareList>(
+        baseUrls,
+        `/v1/personal-agents/${encodeURIComponent(agentId)}/shares/${encodeURIComponent(memberId)}`,
+        { method: "DELETE", token, organizationId: orgId },
+      );
+    },
+
+    async getPersonalAgentChat(orgId: string, agentId: string, workspaceId: string): Promise<PersonalAgentChatResponse> {
+      return requestJson<PersonalAgentChatResponse>(
+        baseUrls,
+        `/v1/personal-agents/${encodeURIComponent(agentId)}/chat?workspaceId=${encodeURIComponent(workspaceId)}`,
+        { method: "GET", token, organizationId: orgId },
+      );
+    },
+
+    async setPersonalAgentChat(orgId: string, agentId: string, input: SetPersonalAgentChat): Promise<PersonalAgentChatResponse> {
+      return requestJson<PersonalAgentChatResponse>(baseUrls, `/v1/personal-agents/${encodeURIComponent(agentId)}/chat`, { method: "PUT", token, organizationId: orgId, body: input });
+    },
+
+    async getPersonalAgentTools(orgId: string, agentId: string): Promise<PersonalAgentToolCatalog> {
+      return requestJson<PersonalAgentToolCatalog>(baseUrls, `/v1/personal-agents/${encodeURIComponent(agentId)}/tools`, { method: "GET", token, organizationId: orgId });
+    },
+
+    async listPersonalAgentRequests(orgId: string, agentId: string): Promise<PersonalAgentRequestList> {
+      return requestJson<PersonalAgentRequestList>(baseUrls, `/v1/personal-agents/${encodeURIComponent(agentId)}/requests`, { method: "GET", token, organizationId: orgId });
+    },
+
+    async createPersonalAgentChangeRequest(orgId: string, agentId: string, input: CreatePersonalAgentChangeRequest): Promise<PersonalAgentRequest> {
+      return requestJson<PersonalAgentRequest>(baseUrls, `/v1/personal-agents/${encodeURIComponent(agentId)}/requests`, { method: "POST", token, organizationId: orgId, body: input });
+    },
+
+    async decidePersonalAgentRequest(orgId: string, agentId: string, requestId: string, decision: PersonalAgentRequestDecision): Promise<PersonalAgentRequest> {
+      return requestJson<PersonalAgentRequest>(
+        baseUrls,
+        `/v1/personal-agents/${encodeURIComponent(agentId)}/requests/${encodeURIComponent(requestId)}/decision`,
+        { method: "POST", token, organizationId: orgId, body: { decision } },
       );
     },
 

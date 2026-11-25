@@ -5,7 +5,6 @@ import {
   calendarTriggerPrompt,
   desktopRunnerConnected,
   personalAgentRunInstructions,
-  personalAgentToolPolicyBlocks,
 } from "@openwork/automations"
 import { AUTOMATION_RUNNER_WORK_RUN_LIMIT, REMOTE_SESSION_ONLY_RUNNER_CAPABILITY, isAutomationCloudDefaultModel } from "@openwork/types/automations"
 import type {
@@ -43,8 +42,8 @@ import { CalendarTriggerSource, type CalendarTriggerSourceDeps } from "./calenda
 import { PERSONAL_AGENT_ROUTINE_INSTRUCTIONS_MAX_LENGTH } from "@openwork/types/den/personal-agents"
 import { isDenTypeId, normalizeDenTypeId } from "@openwork-ee/utils/typeid"
 import { appLogger } from "../observability/logger.js"
-import { agentToolLimitScopes } from "../mcp/workbot-turn-limits.js"
 import { personalAgentRepository } from "../personal-agents/repository.js"
+import { admitPersonalAgentRun } from "../personal-agents/run-admission.js"
 import {
   getOpenWorkWebRuntimeAccess,
   OPENWORK_WEB_ACCESS_REQUIRED_CODE,
@@ -985,21 +984,6 @@ export class AutomationService {
     return true
   }
 
-  private async pinnedAgentForRun(agentRevisionId: string, engineKind: string): Promise<
-    | { ok: true; agentName: string; brief: string; mcpScopes: string[] }
-    | { ok: false; code: "execution_failed" | "execution_runtime_unavailable"; message: string }
-  > {
-    const pinned = await personalAgentRepository.runDefinition(agentRevisionId)
-    if (!pinned || pinned.archived) {
-      return { ok: false, code: "execution_failed", message: "This routine's agent no longer exists, so it did not run." }
-    }
-    const mcpScopes = agentToolLimitScopes(personalAgentToolPolicyBlocks(pinned.toolPolicy))
-    if (mcpScopes.length > 0 && engineKind !== HEADLESS_AGENT_ENGINE_KIND) {
-      return { ok: false, code: "execution_runtime_unavailable", message: "This agent limits which tools it may use, and only OpenWork Cloud's headless runtime can apply that. The run was not started." }
-    }
-    return { ok: true, agentName: pinned.agentName, brief: pinned.brief, mcpScopes }
-  }
-
   private async executeCloudAgentRun(
     claimed: NonNullable<Awaited<ReturnType<typeof automationRepository.claimCloud>>>,
     leaseOwner: string,
@@ -1023,7 +1007,13 @@ export class AutomationService {
     }
 
     const agentRun = claimed.revision.agentRevisionId
-      ? await this.pinnedAgentForRun(claimed.revision.agentRevisionId, engineKind)
+      ? await admitPersonalAgentRun({
+        agentRevisionId: claimed.revision.agentRevisionId,
+        runId: claimed.run.id,
+        organizationId: claimed.automation.organizationId,
+        actingMemberId: claimed.automation.ownerMemberId,
+        headless: engineKind === HEADLESS_AGENT_ENGINE_KIND,
+      })
       : null
     if (agentRun && !agentRun.ok) {
       await this.completeCloud({

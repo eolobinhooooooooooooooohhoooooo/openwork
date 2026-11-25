@@ -162,6 +162,7 @@ export const AutomationRunTable = mysqlTable(
     cancel_requested_at: timestamp("cancel_requested_at", { fsp: 3 }),
     mcp_token_hash: varchar("mcp_token_hash", { length: 128 }),
     mcp_token_expires_at: timestamp("mcp_token_expires_at", { fsp: 3 }),
+    acting_member_id: denTypeIdColumn("member", "acting_member_id"),
     ...timestamps,
   },
   (table) => [
