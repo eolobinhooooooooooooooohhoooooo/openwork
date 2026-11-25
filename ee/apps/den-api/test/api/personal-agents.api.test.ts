@@ -223,8 +223,10 @@ test("a routine is an ordinary Automation that carries the agent's id and pins i
   assert.equal(field(none.body, "error"), "personal_agent_routine_required")
 
   const created = await asDana("POST", `/v1/personal-agents/${agentId}/routines`, {
-    name: "Morning bug sweep", instructions: "Read today's reports in #bugs and file an issue for each new one.", schedule: morning,
+    name: "Morning bug sweep", instructions: "Read today's reports in #bugs and file an issue for each new one.", schedule: morning, executionTarget: "cloud",
   })
+  const onDesktop = await asDana("POST", `/v1/personal-agents/${agentId}/routines`, { name: "Desktop sweep", instructions: "Check #bugs.", schedule: morning, executionTarget: "desktop" })
+  assert.equal(onDesktop.status, 400, summary(onDesktop))
   assert.equal(created.status, 201, summary(created))
   const routine = automationDetailSchema.parse(created.body)
   routineId = routine.automation.id

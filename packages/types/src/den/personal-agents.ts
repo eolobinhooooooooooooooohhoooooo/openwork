@@ -138,6 +138,8 @@ export const createPersonalAgentRoutineSchema = z.object({
   schedule: automationScheduleSchema,
   model: automationModelSchema.optional()
     .describe("Omit to run on the organization's cloud default model."),
+  executionTarget: z.literal("cloud").optional()
+    .describe("A routine always runs in OpenWork Cloud; this may be omitted."),
 }).strict().meta({ ref: "CreatePersonalAgentRoutine" })
 export type CreatePersonalAgentRoutine = z.infer<typeof createPersonalAgentRoutineSchema>
 
