@@ -8,6 +8,7 @@ import { toast } from "sonner"
 import { useQuery } from "@tanstack/react-query"
 
 import { automationProposalSchema, type AutomationProposal } from "@openwork/types/automations"
+import { personalAgentProposalSchema, type PersonalAgentProposal } from "@openwork/types/den/personal-agents"
 
 import { createDenClient, readDenSettings } from "@/app/lib/den"
 import { featureAnalytics } from "@/app/lib/analytics"
@@ -70,6 +71,26 @@ export function parseAutomationProposal(output: unknown): AutomationProposal | n
   return parsed.success ? parsed.data : null
 }
 
+export function parsePersonalAgentProposal(output: unknown): PersonalAgentProposal | null {
+  const envelope = parseOutputValue(output)
+  if (envelope === null || typeof envelope !== "object" || !("id" in envelope) || !("ok" in envelope) || !("result" in envelope)) return null
+  if (envelope.ok !== true || envelope.id !== "agent.propose") return null
+  const result = envelope.result
+  if (result === null || typeof result !== "object" || !("proposal" in result)) return null
+  const parsed = personalAgentProposalSchema.safeParse(result.proposal)
+  return parsed.success ? parsed.data : null
+}
+
+export function isPersonalAgentProposalToolPart(part: DynamicToolUIPart): boolean {
+  return part.toolName === "openwork_execute"
+    && part.state === "output-available"
+    && parsePersonalAgentProposal(part.output) !== null
+}
+
+function isProposalToolPart(part: DynamicToolUIPart): boolean {
+  return isAutomationProposalToolPart(part) || isPersonalAgentProposalToolPart(part)
+}
+
 export function isAutomationProposalToolPart(part: DynamicToolUIPart): boolean {
   return part.toolName === "openwork_execute"
     && part.state === "output-available"
@@ -77,13 +98,13 @@ export function isAutomationProposalToolPart(part: DynamicToolUIPart): boolean {
 }
 
 export function automationProposalCalls(part: DynamicToolUIPart): DynamicToolUIPart[] {
-  return (codeModeToolCalls(part) ?? []).filter(isAutomationProposalToolPart)
+  return (codeModeToolCalls(part) ?? []).filter(isProposalToolPart)
 }
 
 export function automationProposalsInParts(parts: UIMessage["parts"]): DynamicToolUIPart[] {
   return parts.flatMap((part) => {
     if (part.type !== "dynamic-tool") return []
-    if (isAutomationProposalToolPart(part)) return [part]
+    if (isProposalToolPart(part)) return [part]
     return automationProposalCalls(part)
   })
 }

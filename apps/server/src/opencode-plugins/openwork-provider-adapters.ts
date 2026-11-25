@@ -352,6 +352,30 @@ function automationContribution(): OpenworkFeatureContribution {
   };
 }
 
+function agentContribution(): OpenworkFeatureContribution {
+  const provider: OpenworkProviderRef = { id: "openwork-agents", kind: "builtin" };
+  return {
+    featureId: "agents",
+    provider,
+    affordances: [
+      affordance({
+        id: "agent.propose",
+        kind: "command",
+        title: "Propose a personal agent",
+        description: "Offer an agent of the person's own, with its first routine, for them to start with one confirmation. This only renders a \"Start like this?\" card in the chat; it cannot create or run anything. Use it only where OpenWork Connect's instructions mention personal agents.",
+        provider,
+        arguments: [
+          argument("name", "string", true, "Short name for the agent taken from its job, two or three words, e.g. \"Bug watcher\"."),
+          argument("brief", "string", true, "The agent's standing brief as Markdown, written from what the person said: what it watches or does, how it decides, what it never does."),
+          argument("routine", "object", true, "Its first routine: { name (short, e.g. \"Check #bugs\"), instructions (what one run does), schedule }. Schedule has a kind and an IANA timezone: daily {hour, minute}, weekly {daysOfWeek (0=Sunday), hour, minute}, or interval {everyHours 1-24, optional daysOfWeek, startHour, endHour}. Pick a sensible default yourself when the person named none."),
+        ],
+        effects: noEffects,
+      }),
+    ],
+    guidance: [],
+  };
+}
+
 function extensionContribution(): OpenworkFeatureContribution {
   const provider: OpenworkProviderRef = { id: "openwork-extensions", kind: "extension" };
   return {
@@ -457,6 +481,7 @@ export function buildOpenworkProviderContributions(
     sessionContribution(),
     sessionGroupContribution(),
     automationContribution(),
+    agentContribution(),
     extensionContribution(),
     ...mcps
       .filter((mcp) => mcp.name !== "openwork-cloud")

@@ -116,6 +116,12 @@ import { ActivityPage } from "@/react-app/domains/activity/activity-page";
 import type { ActivityResource } from "@/react-app/kernel/activity-types";
 import { encodeConnectSkillToken } from "@/react-app/domains/session/surface/composer/connect-skill-token";
 import { AutomationsPage } from "@/react-app/domains/automations/automations-page";
+import { useAutomationsDenContext } from "@/react-app/domains/automations/use-automations";
+import { useOrgFeature } from "@/react-app/domains/cloud/use-org-feature";
+import { agentPromptNoteParts } from "@/react-app/domains/agents/agent-prompt-note";
+import { personalAgentSessionExtensions } from "@/react-app/domains/agents/agents-extension";
+import { PersonalAgentsProvider, type AgentsRuntime } from "@/react-app/domains/agents/agents-runtime";
+import { SessionExtensionsProvider } from "@/react-app/kernel/session-extensions";
 import { automationProviderCatalog } from "@/react-app/domains/automations/automation-model-options";
 import { remoteThreadAttentionBySession, useRemoteThreadAttentionKey } from "@/react-app/domains/session/remote-threads/remote-thread-store";
 import { CreatedSkillSharingProvider } from "./created-skill-sharing-provider";
@@ -410,6 +416,8 @@ function focusedWorkbenchPaneOwner() {
 }
 
 export function SessionRoute() {
+  const personalAgentsEnabled = useOrgFeature("personalAgents");
+  const agentsDen = useAutomationsDenContext();
   const navigate = useNavigate();
   const location = useLocation();
   const appsRouteActive = /^(?:\/apps|\/dashboard\/apps)(?:\/|$)/.test(location.pathname);
@@ -1785,6 +1793,7 @@ export function SessionRoute() {
                   }
 
                   const parts = await draftToParts(draft, selectedWorkspaceRoot, targetSessionId, selectedWorkspaceEndpoint);
+                  if (personalAgentsEnabled) parts.push(...agentPromptNoteParts(targetSessionId));
                   assertCurrent();
                   const system = await buildOpenworkSessionSystemContext(client, {
                     workspaceId: selectedWorkspaceId,
@@ -2158,6 +2167,7 @@ export function SessionRoute() {
                     return;
                   }
                   const parts = await draftToParts(draft, workspaceRoot, targetSessionId, endpoint);
+                  if (personalAgentsEnabled) parts.push(...agentPromptNoteParts(targetSessionId));
                   assertCurrent();
                   const system = await buildOpenworkSessionSystemContext(endpoint.client, {
                     workspaceId: workspace.id,
@@ -2709,6 +2719,32 @@ export function SessionRoute() {
     openNewSessionDraft({ workspaceId }, navigate);
     focusPromptSoon();
   }, [navigate]);
+
+  const renameSessionTitle = useCallback(async (sessionId: string, nextTitle: string, workspaceId: string) => {
+    const trimmed = nextTitle.trim();
+    if (!trimmed) return;
+    const owner = workspaces.find((workspace) => workspace.id === workspaceId
+      && sessionsByWorkspaceIdRef.current[workspace.id]?.some((session) => session.id === sessionId));
+    const endpoint = owner ? endpointForSessionWorkspace(owner) : null;
+    if (!owner || !endpoint) throw new Error("The session's workspace is no longer connected.");
+    const createEngineClient = isOpencodeV2BaseUrl(endpoint.opencodeBaseUrl) ? createClientV2 : createClient;
+    const ownerClient = createEngineClient(endpoint.opencodeBaseUrl, owner.path, { token: endpoint.token, mode: "openwork" });
+    unwrap(await ownerClient.session.update({ sessionID: sessionId, title: trimmed, directory: owner.path }));
+    await reloadWorkspaceSessions(owner.id);
+  }, [endpointForSessionWorkspace, reloadWorkspaceSessions, workspaces]);
+
+  const agentsRuntime = useMemo<AgentsRuntime | null>(() => {
+    if (!personalAgentsEnabled || !agentsDen.ready || !agentsDen.client || !agentsDen.organizationId || !selectedWorkspaceId) return null;
+    return {
+      client: agentsDen.client,
+      organizationId: agentsDen.organizationId,
+      workspaceId: selectedWorkspaceId,
+      selectedSessionId: selectedSessionId ?? null,
+      createSession: (workspaceId) => handleCreateTaskInWorkspaceWithOpenMode(workspaceId, "primary"),
+      openSession: (workspaceId, sessionId) => navigateToWorkspaceSession(workspaceId, sessionId),
+      renameSession: (workspaceId, sessionId, title) => void renameSessionTitle(sessionId, title, workspaceId).catch(() => undefined),
+    };
+  }, [agentsDen.client, agentsDen.organizationId, agentsDen.ready, handleCreateTaskInWorkspaceWithOpenMode, navigateToWorkspaceSession, personalAgentsEnabled, renameSessionTitle, selectedSessionId, selectedWorkspaceId]);
 
   const createNewSessionInSelectedWorkspace = useCallback(() => {
     if (selectedWorkspaceId) handleCreateTaskInWorkspace(selectedWorkspaceId);
@@ -3788,6 +3824,8 @@ export function SessionRoute() {
         engine={{ baseUrl: opencodeBaseUrl, directory: selectedWorkspaceRoot || undefined, token: selectedWorkspaceServerToken || undefined }}
       />
     ) : null}
+    <PersonalAgentsProvider value={agentsRuntime}>
+    <SessionExtensionsProvider value={personalAgentSessionExtensions}>
     <SessionPage
       ref={composerImpressionRef}
       currentSessionArchive={currentSessionArchive}
@@ -4076,22 +4114,7 @@ export function SessionRoute() {
       questionReplyBusy={questionReplyBusy}
       respondQuestion={respondQuestion}
       safeStringify={safeStringify}
-      onRenameSession={
-        opencodeClient
-          ? async (sessionId, nextTitle, workspaceId) => {
-              const trimmed = nextTitle.trim();
-              if (!trimmed) return;
-              const owner = workspaces.find((workspace) => workspace.id === workspaceId
-                && sessionsByWorkspaceId[workspace.id]?.some((session) => session.id === sessionId));
-              const endpoint = owner ? endpointForSessionWorkspace(owner) : null;
-              if (!owner || !endpoint) throw new Error("The session's workspace is no longer connected.");
-              const createEngineClient = isOpencodeV2BaseUrl(endpoint.opencodeBaseUrl) ? createClientV2 : createClient;
-              const ownerClient = createEngineClient(endpoint.opencodeBaseUrl, owner.path, { token: endpoint.token, mode: "openwork" });
-              unwrap(await ownerClient.session.update({ sessionID: sessionId, title: trimmed, directory: owner.path }));
-              await reloadWorkspaceSessions(owner.id);
-            }
-          : undefined
-      }
+      onRenameSession={opencodeClient ? renameSessionTitle : undefined}
       onDeleteSession={
         client && selectedWorkspaceId
           ? async (sessionId, workspaceId) => {
@@ -4134,6 +4157,8 @@ export function SessionRoute() {
       extensionsActive={extensionsMainOpen}
       onAccessibleTargetsChange={setPaletteAccessibleTargets}
     />
+    </SessionExtensionsProvider>
+    </PersonalAgentsProvider>
     <CreateWorkspaceModal
       open={createWorkspaceOpen}
       onClose={() => {

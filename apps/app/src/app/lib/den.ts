@@ -9,6 +9,15 @@ import {
   AUTOMATION_SCHEDULE_KINDS,
   AUTOMATION_SCHEDULE_KINDS_HEADER,
 } from "@openwork/types/automations";
+import type {
+  CreatePersonalAgent,
+  CreatePersonalAgentRoutine,
+  PersonalAgentDetail,
+  PersonalAgentList,
+  PersonalAgentRoutineList,
+  PersonalAgentRunResponse,
+  RunPersonalAgentNow,
+} from "@openwork/types/den/personal-agents";
 import type { GatewayAuthorizationRequest, GatewayProviderSummary } from "@openwork/types/den/gateway";
 import { parseGatewayUsableModel } from "./gateway-usable-model";
 import type { DesktopStartupReport } from "@openwork/types/den/diagnostics";
@@ -3511,6 +3520,38 @@ export function createDenClient(options: {
         baseUrls,
         `/v1/automations/${encodeURIComponent(automationId)}/runs${query}`,
         { method: "GET", token, organizationId: orgId, automationModelAttentionCapable: true },
+      );
+    },
+
+    async listPersonalAgents(orgId: string): Promise<PersonalAgentList> {
+      return requestJson<PersonalAgentList>(baseUrls, "/v1/personal-agents?limit=100", { method: "GET", token, organizationId: orgId });
+    },
+
+    async createPersonalAgent(orgId: string, input: CreatePersonalAgent): Promise<PersonalAgentDetail> {
+      return requestJson<PersonalAgentDetail>(baseUrls, "/v1/personal-agents", { method: "POST", token, organizationId: orgId, body: input });
+    },
+
+    async listPersonalAgentRoutines(orgId: string, agentId: string): Promise<PersonalAgentRoutineList> {
+      return requestJson<PersonalAgentRoutineList>(
+        baseUrls,
+        `/v1/personal-agents/${encodeURIComponent(agentId)}/routines`,
+        { method: "GET", token, organizationId: orgId },
+      );
+    },
+
+    async createPersonalAgentRoutine(orgId: string, agentId: string, input: CreatePersonalAgentRoutine): Promise<AutomationDetail> {
+      return requestJson<AutomationDetail>(
+        baseUrls,
+        `/v1/personal-agents/${encodeURIComponent(agentId)}/routines`,
+        { method: "POST", token, organizationId: orgId, body: input },
+      );
+    },
+
+    async runPersonalAgentNow(orgId: string, agentId: string, input: RunPersonalAgentNow = {}): Promise<PersonalAgentRunResponse> {
+      return requestJson<PersonalAgentRunResponse>(
+        baseUrls,
+        `/v1/personal-agents/${encodeURIComponent(agentId)}/run`,
+        { method: "POST", token, organizationId: orgId, body: input },
       );
     },
 

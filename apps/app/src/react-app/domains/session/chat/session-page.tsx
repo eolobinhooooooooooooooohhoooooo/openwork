@@ -95,6 +95,7 @@ import type { OpenTargetOptions } from "@/lib/target-provider";
 import { SidePanel } from "../panel/side-panel";
 import { getSidePanelSessionKey } from "../panel/side-panel-session";
 import { PanelSessionProvider } from "@/react-app/kernel/panel-session-context";
+import { useSessionExtensions } from "@/react-app/kernel/session-extensions";
 import { isFilesRailActive, openFileTabId, type EmptyPanelView } from "../panel/files-rail";
 import { useCreateTab, useOpenBrowserRailPane } from "../panel/use-side-panel-tabs";
 import { useBrowserPresentationController } from "../panel/use-browser-presentation";
@@ -458,6 +459,12 @@ function controlStringArg(args: unknown, key: string) {
 }
 
 export function SessionPage(props: SessionPageProps) {
+  const extensions = useSessionExtensions();
+  const hiddenSidebarSessionIds = extensions.useSidebarHiddenSessionIds();
+  const sidebarSessionGroups = useMemo(() => hiddenSidebarSessionIds.size === 0
+    ? props.sidebar.workspaceSessionGroups
+    : props.sidebar.workspaceSessionGroups.map((group) => ({ ...group, sessions: group.sessions.filter((session) => !hiddenSidebarSessionIds.has(session.id)) })),
+  [hiddenSidebarSessionIds, props.sidebar.workspaceSessionGroups]);
   const archivedInWorkspace = (workspaceId: string, sessionId: string | null) => {
     const session = props.sidebar.workspaceSessionGroups.find(group => group.workspace.id === workspaceId)
       ?.sessions.find(session => session.id === sessionId);
@@ -1477,7 +1484,7 @@ export function SessionPage(props: SessionPageProps) {
       >
         <AppSidebar
           sessionNumberShortcuts={props.sessionNumberShortcuts}
-          workspaceSessionGroups={props.sidebar.workspaceSessionGroups}
+          workspaceSessionGroups={sidebarSessionGroups}
           selectedWorkspaceId={props.sidebar.selectedWorkspaceId}
           developerMode={props.sidebar.developerMode}
           selectedSessionId={props.sidebar.selectedSessionId}
@@ -1591,7 +1598,7 @@ export function SessionPage(props: SessionPageProps) {
                   <TooltipContent>Back to parent chat</TooltipContent>
                 </Tooltip>
               ) : null}
-              {props.primaryHeader && !hasMainContentTakeover ? null : <>
+              {props.primaryHeader && !hasMainContentTakeover ? null : <extensions.HeaderTitle sessionId={props.primaryTitle || props.mainContentTitle ? null : props.selectedSessionId}>
               <h1 data-session-header-title className={cn("truncate font-medium text-dls-text", !isElectronRuntime() && !props.primaryTitle && !props.mainContentTitle && "max-lg:hidden", props.mainContentHeaderActionsRef ? "text-base leading-6" : "text-[13px]")}>
                 {props.primaryTitle
                   ? props.primaryTitle
@@ -1610,7 +1617,7 @@ export function SessionPage(props: SessionPageProps) {
                   <span className="max-w-40 truncate">{workspaceName}</span>
                 </span>
               ) : null}
-              </>}
+              </extensions.HeaderTitle>}
               {props.developerMode && !props.mainContentHeaderActionsRef ? (
                 <span className="hidden text-[12px] text-dls-secondary lg:inline">
                   {props.headerStatus}
@@ -2112,6 +2119,7 @@ export function SessionPage(props: SessionPageProps) {
               </>
             ) : null}
           </ResizablePanelGroup>
+          <extensions.Panel sessionId={props.primaryTitle || props.mainContentTitle ? null : props.selectedSessionId} />
           <aside className={cn("w-10 shrink-0 flex-col items-center gap-1 px-1 py-2 text-muted-foreground mac:titlebar-no-drag", props.developerMode ? "flex" : "hidden", props.primarySurface !== "flat" && "lg:flex")}>
             {isElectronRuntime() && browserPresentation.enabled ? <BrowserRailButton controller={browserPresentation} /> : isElectronRuntime() ? (
               <Button

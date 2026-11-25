@@ -55,6 +55,7 @@ import {
   automationProposalCalls,
   automationProposalsInParts,
   isAutomationProposalToolPart,
+  isPersonalAgentProposalToolPart,
   OpenWorkAutomationProposalTool,
 } from "@/components/tools/openwork-automation-proposal"
 import { QuestionTool, questionToolAnswers } from "@/components/tools/question"
@@ -288,7 +289,7 @@ const ToolMessageInner = ({ part }: ToolMessageProps) => {
         <div className="flex min-w-0 flex-col gap-1">
           {!foldTool && <CodeModeTool part={part} calls={calls.filter((call) => !started.has(call.toolCallId))} lifecycle={lifecycle} connectors={connectorIdentities} />}
           {promptCall && <CredentialPromptCard part={promptCall} continueToolCallId={part.toolCallId} />}
-          {proposals.map((call) => <OpenWorkAutomationProposalTool key={call.toolCallId} part={call} />)}
+          {proposals.map((call) => <ProposalCard key={call.toolCallId} part={call} />)}
           {remoteStarts.filter(({ call }) => !pinnedRemoteThreads.has(call.toolCallId))
             .map(({ start, call }) => <RemoteThreadRunLine key={start.key} start={start} part={call} />)}
         </div>
@@ -371,8 +372,8 @@ const ToolMessageInner = ({ part }: ToolMessageProps) => {
     return pinnedQuestions.has(part.toolCallId) ? null : <QuestionTool part={part} />
   }
 
-  if (part.type === "dynamic-tool" && isAutomationProposalToolPart(part)) {
-    return pinnedProposals.has(part.toolCallId) ? null : <OpenWorkAutomationProposalTool part={part} />
+  if (part.type === "dynamic-tool" && (isAutomationProposalToolPart(part) || isPersonalAgentProposalToolPart(part))) {
+    return pinnedProposals.has(part.toolCallId) ? null : <ProposalCard part={part} />
   }
 
   if (part.type === "dynamic-tool" && connectionCardParts.has(part.toolCallId)) {
@@ -402,6 +403,12 @@ const ToolMessageInner = ({ part }: ToolMessageProps) => {
       onReopenAuthorization={onMcpReopenAuthorization}
     />
   )
+}
+
+function ProposalCard({ part }: { part: DynamicToolUIPart }) {
+  const { renderAgentProposal } = useMessageList()
+  if (isPersonalAgentProposalToolPart(part)) return renderAgentProposal?.(part) ?? null
+  return <OpenWorkAutomationProposalTool part={part} />
 }
 
 const isEmptyMessage = (message: UIMessage): boolean => message.parts.length === 0
@@ -1669,7 +1676,7 @@ function MessageGroup({
       {renderItems(proseItems, stepItems.length, collapseSteps || panelLive)}
       {pinnedProposals.map((part) => (
         <Message key={`automation-proposal-${part.toolCallId}`} className="mx-auto flex w-full max-w-3xl flex-col px-2 md:px-10">
-          <OpenWorkAutomationProposalTool part={part} />
+          <ProposalCard part={part} />
         </Message>
       ))}
       {computerHistory ? <Message className="mx-auto flex w-full max-w-3xl flex-col px-2 md:px-10">

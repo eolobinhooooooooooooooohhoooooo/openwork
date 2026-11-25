@@ -15,6 +15,8 @@ export function personalAgentRunInstructions(input: { agentName: string; brief: 
     "",
     "This run's task:",
     input.instructions.trim(),
+    "",
+    "Your reply is posted in this person's chat with you. Make it one or two plain sentences: what you found and what you did, naming each thing you created. No headings, tables or lists. If there was nothing to do, say so in one sentence.",
   ].join("\n")
 }
 

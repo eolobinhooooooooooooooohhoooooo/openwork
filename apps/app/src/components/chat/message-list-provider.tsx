@@ -7,6 +7,7 @@ import type {
   ChatToolReconnectResult,
 } from "@/components/tools/error-attribution"
 import * as React from "react"
+import type { DynamicToolUIPart } from "ai"
 import type { ConnectorToolIdentity } from "@/react-app/domains/connections/connector-tool-identity"
 import type { OpenworkServerClient } from "@/app/lib/openwork-server"
 import type { McpAppOrigin } from "./mcp-app-origin"
@@ -38,6 +39,7 @@ interface MessageListContextValue {
   resolveAutoRouteName: AutoRouteNameResolver
   connectorIdentities: ConnectorToolIdentity[]
   syncDegraded: boolean
+  renderAgentProposal?: (part: DynamicToolUIPart) => React.ReactNode
   dispatchAction: (action: DispatchAction) => void
   setPrompt: (prompt: string) => void
   onRevertToUserMessage: (messageId: string) => void
@@ -98,6 +100,7 @@ interface MessageListProviderProps {
   providerConnectedCount: number
   connectorIdentities?: ConnectorToolIdentity[]
   syncDegraded?: boolean
+  renderAgentProposal?: (part: DynamicToolUIPart) => React.ReactNode
   dispatchAction: (action: DispatchAction) => void
   setPrompt: (prompt: string) => void
 }
@@ -126,6 +129,7 @@ export function MessageListProvider({
   providerConnectedCount,
   connectorIdentities = [],
   syncDegraded = false,
+  renderAgentProposal,
   dispatchAction,
   setPrompt,
   onRevertToUserMessage,
@@ -257,6 +261,7 @@ export function MessageListProvider({
       resolveAutoRouteName,
       connectorIdentities,
       syncDegraded,
+      renderAgentProposal,
       composerSubagentToolCallIds,
       ...stableHandlers,
       onForkAtMessage: canForkAtMessage ? stableHandlers.onForkAtMessage : undefined,
@@ -295,6 +300,7 @@ export function MessageListProvider({
       resolveAutoRouteName,
       connectorIdentities,
       syncDegraded,
+      renderAgentProposal,
       composerSubagentToolCallIds,
       stableHandlers,
       canForkAtMessage,

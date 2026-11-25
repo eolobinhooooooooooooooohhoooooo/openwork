@@ -150,6 +150,22 @@ export const personalAgentRoutineListSchema = z.object({
 }).meta({ ref: "PersonalAgentRoutineList" })
 export type PersonalAgentRoutineList = z.infer<typeof personalAgentRoutineListSchema>
 
+/**
+ * What a desktop chat hands back when a person describes an agent: the agent
+ * and its first routine, for the person to start with one confirmation. A
+ * proposal is inert; the renderer creates both when the person says yes.
+ */
+export const personalAgentProposalSchema = z.object({
+  name: z.string().trim().min(1).max(PERSONAL_AGENT_NAME_MAX_LENGTH),
+  brief: personalAgentBriefSchema,
+  routine: z.object({
+    name: z.string().trim().min(1).max(120),
+    instructions: z.string().trim().min(1).max(PERSONAL_AGENT_ROUTINE_INSTRUCTIONS_MAX_LENGTH),
+    schedule: automationScheduleSchema,
+  }).strict(),
+}).strict().meta({ ref: "PersonalAgentProposal" })
+export type PersonalAgentProposal = z.infer<typeof personalAgentProposalSchema>
+
 export const runPersonalAgentNowSchema = z.object({
   routineId: idSchema.optional()
     .describe("Which of the agent's routines to run. Optional when the agent has exactly one."),
