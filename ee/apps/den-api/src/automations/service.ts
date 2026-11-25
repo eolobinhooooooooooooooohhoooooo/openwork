@@ -41,7 +41,7 @@ import { cloudAutomationRuntime, HEADLESS_AGENT_ENGINE_KIND, type CloudAutomatio
 import { automationTargetAllowed } from "./organization-availability.js"
 import { CalendarTriggerSource, type CalendarTriggerSourceDeps } from "./calendar-trigger-source.js"
 import { PERSONAL_AGENT_ROUTINE_INSTRUCTIONS_MAX_LENGTH } from "@openwork/types/den/personal-agents"
-import { normalizeDenTypeId } from "@openwork-ee/utils/typeid"
+import { isDenTypeId, normalizeDenTypeId } from "@openwork-ee/utils/typeid"
 import { appLogger } from "../observability/logger.js"
 import { agentToolLimitScopes } from "../mcp/workbot-turn-limits.js"
 import { personalAgentRepository } from "../personal-agents/repository.js"
@@ -338,6 +338,7 @@ export class AutomationService {
   }
 
   async get(scope: OwnerScope, automationId: string) {
+    if (!isDenTypeId("automation", automationId)) return null
     const item = await automationRepository.get({ ...scope, automationId })
     return item && readableBy(scope, item.revision.schedule) ? this.reconcileModelAttention(item, scope) : null
   }
@@ -535,7 +536,8 @@ export class AutomationService {
     return automationRepository.listRunsInRange({ ...scope, from: input.from, to: input.to, cursor: input.cursor, limit: input.limit ?? 200 })
   }
 
-  getRun(scope: OwnerScope, runId: string) {
+  async getRun(scope: OwnerScope, runId: string) {
+    if (!isDenTypeId("automationRun", runId)) return null
     return automationRepository.getRunReceipt({ ...scope, runId })
   }
 

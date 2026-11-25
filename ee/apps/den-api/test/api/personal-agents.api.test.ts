@@ -166,7 +166,7 @@ test("Dana creates an agent from chat through OpenWork Connect, lists it, and an
   const token = await den.mintMcpToken(dana, orgId)
   const found = await den.callMcpTool(token, "search_capabilities", { query: "create personal agent", type: "api", limit: 20 })
   assert.ok(names(found).includes("createPersonalAgent"), found.raw)
-  assert.match(await connectInstructions(token), /make it now instead of proposing an Automation: createPersonalAgent/, "the chat is told to make an agent when asked for one")
+  assert.match(await connectInstructions(token), /make it now instead of proposing an Automation.*First createPersonalAgent.*createPersonalAgentRoutine/, "the chat is told to make an agent when asked for one")
 
   const created = await den.callMcpTool(token, "execute_capability", { name: "createPersonalAgent", body: { name: "Bug watcher", brief: BRIEF } })
   assert.equal(created.isError, false, created.raw)
@@ -295,6 +295,10 @@ test("running the agent now is a manual Automation run whose instructions start 
   assert.equal(run.revisionId, routine.revision.id)
   assert.equal(routine.revision.agentRevisionId, agentRevision.id)
   assert.equal(agentRevision.version, 3)
+
+  const mistaken = await asDana("GET", `/v1/automation-runs/${routineId}`)
+  assert.equal(mistaken.status, 404, `an Automation id is not a run: ${summary(mistaken)}`)
+  assert.equal((await asDana("GET", `/v1/automations/${run.id}`)).status, 404)
 
   const receipt = await settled(run.id)
   assert.equal(receipt.run.status, "succeeded", JSON.stringify(receipt.run.error))
