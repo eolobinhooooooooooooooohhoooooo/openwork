@@ -3,15 +3,33 @@ import type { AgentSourcesPolicy } from "@openwork/types/den/workbot-proactive"
 const WITHOUT_CONNECTION_SCOPE_PREFIX = "openwork:workbot-without-connection:"
 const WITHOUT_TOOL_SCOPE_PREFIX = "openwork:agent-without-tool:"
 const LIMITED_AGENT_RUN_SCOPE = "openwork:agent-run-limited"
+const AGENT_RUN_SCOPE_PREFIX = "openwork:agent-run:"
+const AGENT_TOOL_CHOICE_PREFIX = "openwork:agent-tool:"
+
+export function personalAgentRunScope(runId: string): string {
+  return `${AGENT_RUN_SCOPE_PREFIX}${runId}`
+}
+
+export function personalAgentRunId(scopes: ReadonlySet<string>): string | undefined {
+  for (const scope of scopes) {
+    if (scope.startsWith(AGENT_RUN_SCOPE_PREFIX)) return scope.slice(AGENT_RUN_SCOPE_PREFIX.length)
+  }
+}
+
+export function personalAgentToolChoiceScope(choice: "allow" | "ask", connectionId: string, toolName: string): string {
+  return `${AGENT_TOOL_CHOICE_PREFIX}${choice}:${encodeURIComponent(connectionId)}/${encodeURIComponent(toolName)}`
+}
 
 export function isWorkbotTurnLimitScope(scope: string): boolean {
   return scope.startsWith(WITHOUT_CONNECTION_SCOPE_PREFIX)
     || scope.startsWith(WITHOUT_TOOL_SCOPE_PREFIX)
+    || scope.startsWith(AGENT_RUN_SCOPE_PREFIX)
+    || scope.startsWith(AGENT_TOOL_CHOICE_PREFIX)
     || scope === LIMITED_AGENT_RUN_SCOPE
 }
 
 export function isLimitedAgentRun(scopes: ReadonlySet<string>): boolean {
-  return scopes.has(LIMITED_AGENT_RUN_SCOPE)
+  return scopes.has(LIMITED_AGENT_RUN_SCOPE) || personalAgentRunId(scopes) !== undefined
 }
 
 export function headlessRunTokenScopes(input: { readOnly?: boolean; scopes?: readonly string[] }): string[] {

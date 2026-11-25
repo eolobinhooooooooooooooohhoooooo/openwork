@@ -4,6 +4,7 @@ import {
   EMPTY_PERSONAL_AGENT_TOOL_POLICY,
   PERSONAL_AGENT_ROUTINE_LIST_LIMIT,
   PERSONAL_AGENT_TOOL_POLICY_MAX_SCOPE_CHARACTERS,
+  personalAgentToolPolicySchema,
   type CreatePersonalAgent,
   type CreatePersonalAgentRoutine,
   type PersonalAgentAccess,
@@ -11,12 +12,15 @@ import {
   type PersonalAgentToolPolicy,
   type RunPersonalAgentNow,
   type UpdatePersonalAgent,
+  type UpdatePersonalAgentRoutine,
 } from "@openwork/types/den/personal-agents"
 import { isDenTypeId, normalizeDenTypeId } from "@openwork-ee/utils/typeid"
-import { listAgentRoutines } from "../automations/repository.js"
-import { automationService, type AutomationPlacementOptions, type AutomationService } from "../automations/service.js"
+import { listAgentRoutineItems, listAgentRoutines } from "../automations/repository.js"
+import { automationService, type AutomationRunNowOptions, type AutomationService } from "../automations/service.js"
 import { getExternalMcpConnection } from "../capability-sources/external-mcp-connections.js"
 import { agentToolLimitScopes } from "../mcp/workbot-turn-limits.js"
+import { recordPersonalAgentEvent } from "./events.js"
+import { personalAgentNeverBlocks } from "./never.js"
 import { personalAgentRepository } from "./repository.js"
 
 type OwnerScope = Parameters<AutomationService["create"]>[0]
@@ -34,33 +38,52 @@ async function toolPolicyOverOrganizationConnectors(organizationId: string, poli
   }
   const canonical = (connectionId: string) => canonicalIds.get(connectionId) ?? connectionId
   const connections: Record<string, PersonalAgentAccess> = {}
-  for (const [connectionId, access] of Object.entries(policy.connections)) connections[canonical(connectionId)] = access
+  for (const [connectionId, access] of Object.entries(policy.connections)) {
+    const id = canonical(connectionId)
+    if (connections[id] !== "block") connections[id] = access
+  }
   const tools: Record<string, Record<string, PersonalAgentAccess>> = {}
-  for (const [connectionId, entries] of Object.entries(policy.tools)) tools[canonical(connectionId)] = { ...entries }
+  for (const [connectionId, entries] of Object.entries(policy.tools)) {
+    const target = tools[canonical(connectionId)] ??= {}
+    for (const [name, access] of Object.entries(entries)) {
+      if (target[name] !== "block") Object.defineProperty(target, name, { value: access, enumerable: true, configurable: true })
+    }
+  }
+  if (!personalAgentToolPolicySchema.safeParse({ connections, tools }).success) throw new Error("personal_agent_tool_policy_too_large")
   const scopes = agentToolLimitScopes(personalAgentToolPolicyBlocks({ connections, tools }))
   if (JSON.stringify(scopes).length > PERSONAL_AGENT_TOOL_POLICY_MAX_SCOPE_CHARACTERS) throw new Error("personal_agent_tool_policy_too_large")
   return { connections, tools }
 }
 
 export class PersonalAgentService {
-  constructor(private readonly automations: AutomationService = automationService) {}
+  constructor(private readonly automationOverride?: AutomationService) {}
+
+  private get automations(): AutomationService {
+    return this.automationOverride ?? automationService
+  }
 
   async create(scope: OwnerScope, definition: CreatePersonalAgent): Promise<PersonalAgentDetail> {
-    const toolPolicy = await toolPolicyOverOrganizationConnectors(scope.organizationId, definition.toolPolicy ?? EMPTY_PERSONAL_AGENT_TOOL_POLICY)
+    const replay = await personalAgentRepository.replayCreate({ ...scope, definition })
+    if (replay) return replay
+    const desired = definition.toolPolicy ?? EMPTY_PERSONAL_AGENT_TOOL_POLICY
+    const blocks = await personalAgentNeverBlocks({ organizationId: scope.organizationId, memberId: scope.ownerMemberId }, definition.never ?? [])
+    const tools = { ...desired.tools }
+    for (const [id, entries] of Object.entries(blocks.tools)) tools[id] = { ...tools[id], ...entries }
+    const toolPolicy = await toolPolicyOverOrganizationConnectors(scope.organizationId, { connections: { ...desired.connections, ...blocks.connections }, tools })
     return personalAgentRepository.create({ ...scope, definition, toolPolicy, now: Date.now() })
   }
 
-  async update(scope: OwnerScope, agentId: string, changes: UpdatePersonalAgent): Promise<PersonalAgentDetail | null> {
+  async update(scope: OwnerScope, agentId: string, changes: UpdatePersonalAgent, actorMemberId?: string): Promise<PersonalAgentDetail | null> {
     const toolPolicy = changes.toolPolicy ? await toolPolicyOverOrganizationConnectors(scope.organizationId, changes.toolPolicy) : undefined
-    return personalAgentRepository.update({ ...scope, agentId, changes, toolPolicy, now: Date.now() })
+    return personalAgentRepository.update({ ...scope, agentId, changes, toolPolicy, actorMemberId, now: Date.now() })
   }
 
   list(scope: OwnerScope, input: { cursor?: string; limit?: number }) {
     return personalAgentRepository.list({ ...scope, cursor: input.cursor, limit: input.limit ?? 50 })
   }
 
-  get(scope: OwnerScope, agentId: string) {
-    return personalAgentRepository.get({ ...scope, agentId })
+  get(scope: OwnerScope, agentId: string, memberId?: string) {
+    return personalAgentRepository.get({ ...scope, agentId, memberId })
   }
 
   archive(scope: OwnerScope, agentId: string) {
@@ -85,16 +108,16 @@ export class PersonalAgentService {
     return agent && agent.agent.state === "active" ? agent : null
   }
 
-  async listRoutines(scope: OwnerScope, agentId: string): Promise<{ items: AutomationListItem[] } | null> {
+  async listRoutines(scope: OwnerScope, agentId: string, memberId?: string): Promise<{ items: AutomationListItem[] } | null> {
     const agent = await this.get(scope, agentId)
     if (!agent) return null
-    return { items: await listAgentRoutines({ ...scope, agentId: agent.agent.id, limit: PERSONAL_AGENT_ROUTINE_LIST_LIMIT }) }
+    return { items: await listAgentRoutines({ ...scope, agentId: agent.agent.id, limit: PERSONAL_AGENT_ROUTINE_LIST_LIMIT, memberId }) }
   }
 
-  async createRoutine(scope: OwnerScope, agentId: string, routine: CreatePersonalAgentRoutine): Promise<AutomationListItem | null> {
+  async createRoutine(scope: OwnerScope, agentId: string, routine: CreatePersonalAgentRoutine, actorMemberId = scope.ownerMemberId): Promise<AutomationListItem | null> {
     const agent = await this.active(scope, agentId)
     if (!agent) return null
-    return this.automations.create(scope, {
+    const created = await this.automations.create(scope, {
       name: routine.name,
       schedule: routine.schedule,
       action: {
@@ -108,9 +131,33 @@ export class PersonalAgentService {
       },
       executionTarget: "cloud",
     }, { agent: { agentId: agent.agent.id } })
+    await recordPersonalAgentEvent({ organizationId: scope.organizationId, agentId, actorMemberId, action: "routine.created", detail: { routineName: created.automation.name, active: created.automation.state === "active" } })
+    return created
   }
 
-  async runNow(scope: OwnerScope, agentId: string, input: RunPersonalAgentNow, options: AutomationPlacementOptions = {}): Promise<{
+  async updateRoutine(scope: OwnerScope, agentId: string, routineId: string, changes: UpdatePersonalAgentRoutine, actorMemberId = scope.ownerMemberId): Promise<AutomationListItem | null> {
+    const current = await this.routine(scope, agentId, routineId)
+    const { active = current.automation.state === "active", ...definition } = changes
+    let updated: AutomationListItem | null = current
+    if (Object.keys(definition).length > 0) updated = await this.automations.update(scope, routineId, definition)
+    if (!updated) return null
+    if (active !== (updated.automation.state === "active")) {
+      updated = active ? await this.automations.activate(scope, routineId) : await this.automations.deactivate(scope, routineId)
+    }
+    if (!updated) return null
+    await recordPersonalAgentEvent({ organizationId: scope.organizationId, agentId, actorMemberId, action: "routine.changed", detail: {
+      routineName: updated.automation.name,
+      name: updated.automation.name !== current.automation.name,
+      instructions: updated.revision.instructions !== current.revision.instructions,
+      schedule: JSON.stringify(updated.revision.schedule) !== JSON.stringify(current.revision.schedule),
+      state: updated.automation.state !== current.automation.state,
+      active: updated.automation.state === "active",
+    } })
+    if (actorMemberId === scope.ownerMemberId) return updated
+    return (await listAgentRoutineItems([agentId], actorMemberId)).find((item) => item.automation.id === current.automation.id) ?? null
+  }
+
+  async runNow(scope: OwnerScope, agentId: string, input: RunPersonalAgentNow, options: AutomationRunNowOptions = {}): Promise<{
     run: AutomationRun
     routine: AutomationListItem
     agentRevision: { id: string; version: number }
@@ -121,7 +168,7 @@ export class PersonalAgentService {
       ? await this.routine(scope, agent.agent.id, input.routineId)
       : await this.onlyRoutine(scope, agent.agent.id)
     const run = await this.automations.runNow(scope, chosen.automation.id, options)
-    const receipt = run ? await this.automations.getRun(scope, run.id) : null
+    const receipt = run ? await this.automations.getRun(scope, run.id, { actingMemberId: options.actingMemberId, agentId: agent.agent.id }) : null
     const pinned = receipt?.revision.agentRevisionId
       ? await personalAgentRepository.runDefinition(receipt.revision.agentRevisionId)
       : null

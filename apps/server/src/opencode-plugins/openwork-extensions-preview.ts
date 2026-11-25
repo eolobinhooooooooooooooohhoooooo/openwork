@@ -345,6 +345,15 @@ async function serverGet(path: string): Promise<unknown> {
   return payload;
 }
 
+async function personalAgentsEnabled(): Promise<boolean> {
+  try {
+    const payload = await serverGet("/managed-policy/personal-agents");
+    return isRecord(payload) && payload.enabled === true;
+  } catch {
+    return false;
+  }
+}
+
 async function readConnectSkillDescriptors(): Promise<ConnectSkillDescriptor[]> {
   try {
     const parsed = connectSkillsEnvelopeSchema.safeParse(
@@ -380,12 +389,13 @@ async function readOpenworkAgentContext(
   engineMcpStatusClient: OpenWorkEngineMcpStatusClient | undefined,
   engineMcpStatusDirectory: string | undefined,
 ): Promise<Record<string, unknown>> {
-  const [uiResult, skills, mcps] = await Promise.all([
+  const [uiResult, skills, mcps, agentsEnabled] = await Promise.all([
     uiControlRequest("context"),
     readConnectSkillDescriptors(),
     readEngineMcpDescriptors(engineMcpStatusClient, engineMcpStatusDirectory),
+    personalAgentsEnabled(),
   ]);
-  const contributions = buildOpenworkProviderContributions(skills, mcps);
+  const contributions = buildOpenworkProviderContributions(skills, mcps, agentsEnabled);
   const providerAffordances = contributions.flatMap((contribution) => contribution.affordances);
   const uiContext = isRecord(uiResult) && isRecord(uiResult.context) ? uiResult.context : null;
   if (!uiContext) {
@@ -495,6 +505,9 @@ async function executeOpenworkAffordance(
     );
   }
   if (request.id === "agent.propose") {
+    if (!await personalAgentsEnabled()) {
+      return unavailableAffordance(request.id, "Personal agents are not turned on for this organization.");
+    }
     return affordanceResult(
       request.id,
       proposePersonalAgent(request.args ?? {}),

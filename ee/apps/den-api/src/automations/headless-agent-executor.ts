@@ -82,7 +82,7 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 async function ownerUserId(scope: OwnerScope) {
-  const members = await db.select({ userId: MemberTable.userId }).from(MemberTable).where(and(
+  const members = await db.$primary.select({ userId: MemberTable.userId }).from(MemberTable).where(and(
     eq(MemberTable.id, normalizeDenTypeId("member", scope.ownerMemberId)),
     eq(MemberTable.organizationId, normalizeDenTypeId("organization", scope.organizationId)),
     isNull(MemberTable.removedAt),
@@ -191,7 +191,7 @@ export async function executeHeadlessAgent(
   try {
     const userId = await deps.ownerUserId(input)
     if (!userId) {
-      return failure({ code: "owner_membership_lost", message: "The Automation owner is no longer an active organization member.", needsAttention: true })
+      return failure({ code: "owner_membership_lost", message: "The person this run uses is no longer a member of this organization.", needsAttention: true })
     }
     const actor = { userId, organizationId: input.organizationId }
 
@@ -232,7 +232,7 @@ export async function executeHeadlessAgent(
         if (!selected || !catalog.models.some((entry) => entry.id === selected)) throw new Error("cloud_agent_gateway_model_unavailable")
         model = selected
       } catch {
-        return failure({ code: "provider_unavailable", message: "The selected cloud model is not available to the Automation owner. Check their model access and try again.", needsAttention: true })
+        return failure({ code: "provider_unavailable", message: "The selected cloud model is not available to the person this run uses. Check their model access and try again.", needsAttention: true })
       }
     }
     let modelAccessRequired = storedTurn?.modelAccessRequired === true
@@ -249,7 +249,7 @@ export async function executeHeadlessAgent(
       ...(execution ? { execution } : {}),
       ...(input.mcpScopes?.length ? { mcpScopes: input.mcpScopes } : {}),
     }).catch((error: unknown) => (isModelAccessRefusal(error) ? null : RUNNER_UNREACHABLE))
-    const accessFailure = () => failure({ code: "provider_unavailable", message: "The cloud model is not available to the Automation owner. Check their model access and try again.", needsAttention: true })
+    const accessFailure = () => failure({ code: "provider_unavailable", message: "The cloud model is not available to the person this run uses. Check their model access and try again.", needsAttention: true })
 
     const sent = await sendTurn()
     if (!sent) return accessFailure()

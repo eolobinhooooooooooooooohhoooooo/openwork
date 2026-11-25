@@ -4,7 +4,6 @@ import type { PersonalAgentProposal } from "@openwork/types/den/personal-agents"
 
 import { automationProposalsInParts, isAutomationProposalToolPart, isPersonalAgentProposalToolPart, parsePersonalAgentProposal, personalAgentProposalsInParts } from "../src/components/tools/openwork-automation-proposal"
 import { startAgentFromProposal, startOnce, type AgentStartApi, type AgentStartProgress } from "../src/react-app/domains/agents/agent-start"
-import { routinesByAgent } from "../src/react-app/domains/agents/use-agents"
 import { scheduleInWords } from "../src/react-app/domains/agents/agent-words"
 
 const proposal: PersonalAgentProposal = {
@@ -58,6 +57,23 @@ test("saying yes creates the agent, then its routine, then starts the first run"
   ])
 })
 
+test("starting forwards the never rules and proposal key, and links the chat before creating the routine", async () => {
+  const { api, calls } = fakeApi()
+  const create = api.createAgent
+  const never = [{ app: "Slack", action: "post message" }]
+  const idempotencyKey = "proposal-key"
+  api.createAgent = (input) => {
+    expect(input.never).toEqual(never)
+    expect(input.idempotencyKey).toBe(idempotencyKey)
+    return create(input)
+  }
+  await startAgentFromProposal({
+    api, proposal: { ...proposal, never }, idempotencyKey, saved: nothing, save: () => undefined,
+    linkChat: async (agentId) => { calls.push(`chat:${agentId}`) },
+  })
+  expect(calls).toEqual(["agent:Bug watcher", "chat:pag_1", "routine:pag_1:Check #bugs", "run:pag_1:aut_1"])
+})
+
 test("a first run that fails to start is retried without a second agent or routine", async () => {
   const { api, calls } = fakeApi({ failRuns: 1 })
   let kept = nothing
@@ -104,11 +120,7 @@ test("an agent proposal is found in a chat step and is not an Automation proposa
   expect(parsePersonalAgentProposal(JSON.stringify({ ok: true, id: "automation.propose", result: { proposal } }))).toBeNull()
 })
 
-test("routines are grouped under their agent and schedules read as plain words", () => {
-  const routine = (id: string, agentId: string | null, state: string) => JSON.parse(JSON.stringify({ automation: { id, agentId, state }, revision: {}, latestRun: null }))
-  const grouped = routinesByAgent([routine("a", "pag_1", "active"), routine("b", null, "active"), routine("c", "pag_1", "archived"), routine("d", "pag_2", "inactive")])
-  expect([...grouped.keys()]).toEqual(["pag_1", "pag_2"])
-  expect(grouped.get("pag_1")?.map((item) => item.automation.id)).toEqual(["a"])
+test("agent schedules read as plain words", () => {
   expect(scheduleInWords(proposal.routine.schedule)).toBe("Every hour, 9 AM to 6 PM, weekdays")
   expect(scheduleInWords({ kind: "daily", timezone: "UTC", hour: 9, minute: 30 })).toBe("Every day at 9:30 AM")
   expect(scheduleInWords({ kind: "weekly", timezone: "UTC", daysOfWeek: [1, 2, 3, 4, 5], hour: 8, minute: 0 })).toBe("Weekdays at 8 AM")

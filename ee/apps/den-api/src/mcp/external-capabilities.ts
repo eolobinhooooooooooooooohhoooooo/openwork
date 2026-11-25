@@ -49,6 +49,8 @@ import type { CapabilityMatch, CapabilityToolAnnotations } from "./search.js"
 import { AGENT_SOURCE_BLOCKED_MESSAGE, agentMayUseExternalTool, agentReadAllowlist, type AgentReadAllowlist } from "./agent-read-sources.js"
 import { AGENT_TOOL_WITHHELD_MESSAGE, connectionsWithheld, toolsWithheld, WORKBOT_CONNECTION_WITHHELD_MESSAGE } from "./workbot-turn-limits.js"
 import { DEN_MCP_WRITE_SCOPE } from "./scopes.js"
+import { personalAgentRunId } from "./workbot-turn-limits.js"
+import { personalAgentToolRefusal } from "../personal-agents/permissions-dispatch.js"
 import {
   codemodeScriptPath,
   resolveCodemodeConnectionNamespaceContext,
@@ -978,6 +980,7 @@ export type ExternalCapabilityExecuteResult =
         | "provider_error"
         | "invalid_capability_arguments"
         | "policy_blocked"
+        | "needs_approval"
         | "insufficient_mcp_scope"
       reason?: "provider_not_read_only" | "provider_destructive" | "provider_schema_changed"
       message: string
@@ -1461,7 +1464,7 @@ export async function executeExternalCapability(input: {
     const forwardedArguments = isRecord(input.args) ? input.args : {}
     let checked: CheckedTool
     let providerCall: ReturnType<typeof callExternalMcpTool>
-    if (input.requireReadOnly) {
+    if (input.requireReadOnly && personalAgentRunId(input.scopes) === undefined) {
       let refusal: ExternalCapabilityFailure | undefined
       let passed!: (value: CheckedTool) => void
       let failed!: (cause: unknown) => void
@@ -1491,13 +1494,18 @@ export async function executeExternalCapability(input: {
       }
     } else {
       const listTools = () => listExternalMcpTools(connection, redirectUri, member, undefined, deadline)
-      let result = check(await cachedExternalToolCatalog(catalogKey, listTools))
-      if (!result.ok && result.error === "unknown_capability") {
+      const agentMember = personalAgentRunId(input.scopes) === undefined ? null : input.member
+      let result = check(await (agentMember ? listTools() : cachedExternalToolCatalog(catalogKey, listTools)))
+      if (!agentMember && !result.ok && result.error === "unknown_capability") {
         forgetExternalToolCatalog(catalogKey)
         result = check(await cachedExternalToolCatalog(catalogKey, listTools))
       }
       if (!result.ok) return result
       checked = result
+      if (agentMember) {
+        const refusal = await personalAgentToolRefusal({ scopes: input.scopes, connection, tool: checked.tool, actingMemberId: agentMember.orgMembershipId })
+        if (refusal) return { ok: false, capability: buildExternalCapabilityName(connection.id, input.toolName), ...refusal }
+      }
       providerCall = callExternalMcpTool({
         connection,
         redirectUri,

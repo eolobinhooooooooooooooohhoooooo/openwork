@@ -36,6 +36,7 @@ import {
   resolveMcpMemberIdentity,
 } from "./external-capabilities.js"
 import { toolsWithheld } from "./workbot-turn-limits.js"
+import { personalAgentToolRefusal } from "../personal-agents/permissions-dispatch.js"
 import { externalMcpToolSchemaDigest } from "./external-mcp-tool-arguments.js"
 import { InventoryEventBus, type InventoryRevision } from "./inventory-event-bus.js"
 import { preflightMcpJsonRpcRequest } from "./json-rpc-preflight.js"
@@ -181,7 +182,7 @@ export function createExternalConnectionProxyServer(input: {
     ...tool,
     _meta: { ui: { visibility: ["app"] } },
   }))
-  const callTool = (tool: ExternalMcpProxyTool, args: Record<string, unknown>) => {
+  const callTool = async (tool: ExternalMcpProxyTool, args: Record<string, unknown>) => {
     const requiredScope = DEN_MCP_WRITE_SCOPE
     if (!input.scopes.has(requiredScope)) {
       return {
@@ -193,6 +194,8 @@ export function createExternalConnectionProxyServer(input: {
         }) }],
       }
     }
+    const refusal = await personalAgentToolRefusal({ scopes: input.scopes, connection, tool, actingMemberId: input.operation.member.orgMembershipId })
+    if (refusal) return { isError: true, content: [{ type: "text" as const, text: JSON.stringify(refusal) }] }
     const call = runtime.callTool({ ...input.operation, toolName: tool.name, args })
     recordConnectorCall(Promise.resolve(call), {
       organizationId: connection.organizationId,

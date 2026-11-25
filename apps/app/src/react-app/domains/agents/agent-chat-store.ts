@@ -13,11 +13,12 @@ export type AgentChat = {
   routineId: string | null;
   routineName: string | null;
   firstRunId: string | null;
+  chatLinkPending?: boolean;
   asked: boolean;
   createdAt: number;
 };
 
-export type AgentChatProgress = Partial<Pick<AgentChat, "agentId" | "agentName" | "proposalId" | "routineId" | "routineName" | "firstRunId">>;
+export type AgentChatProgress = Partial<Pick<AgentChat, "agentId" | "agentName" | "proposalId" | "routineId" | "routineName" | "firstRunId" | "chatLinkPending">>;
 
 type AgentChatStore = {
   chats: Record<string, AgentChat>;
@@ -77,8 +78,8 @@ export function agentChatFor(chats: Record<string, AgentChat>, organizationId: s
   return chat && chat.organizationId === organizationId ? chat : null;
 }
 
-export function agentChatForAgent(chats: Record<string, AgentChat>, organizationId: string, agentId: string): AgentChat | null {
+export function agentChatForAgent(chats: Record<string, AgentChat>, organizationId: string, workspaceId: string, agentId: string): AgentChat | null {
   return Object.values(chats)
-    .filter((chat) => chat.organizationId === organizationId && chat.agentId === agentId)
+    .filter((chat) => chat.organizationId === organizationId && chat.workspaceId === workspaceId && chat.agentId === agentId)
     .sort((a, b) => b.createdAt - a.createdAt)[0] ?? null;
 }

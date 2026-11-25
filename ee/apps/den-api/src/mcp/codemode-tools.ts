@@ -350,7 +350,7 @@ export async function buildExternalMcpToolTree(input: {
         usageSource: input.usageSource,
       })).pipe(Effect.flatMap((result) => result.ok
         ? Effect.succeed(toolResultValue(result.result))
-        : Effect.fail(toolError(result.message)))),
+        : Effect.fail(toolError(result.error === "needs_approval" ? `needs_approval: ${result.message}` : result.message)))),
     })] satisfies [string, Tool.Definition])
     return [[namespace, Object.fromEntries(definitions)] satisfies [string, Record<string, Tool.Definition>]]
   })

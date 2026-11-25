@@ -23,12 +23,13 @@ import {
   type OrganizationContextVariables,
 } from "../../middleware/index.js"
 import { invalidRequestSchema, jsonResponse, notFoundSchema } from "../../openapi.js"
+import { canManagePersonalAgent, personalAgentAccess, personalAgentOwnerScope } from "../../personal-agents/access.js"
 import { personalAgentService, type PersonalAgentService } from "../../personal-agents/service.js"
 import type { AuthContextVariables } from "../../session.js"
 import { automationRouteFailure } from "../automations/index.js"
 import { registerPersonalAgentAdminRoutes } from "./admin.js"
 import { registerPersonalAgentPermissionsRoutes } from "./permissions.js"
-import { registerPersonalAgentSharingRoutes } from "./sharing.js"
+import { personalAgentCaller, personalAgentForbidden, registerPersonalAgentSharingRoutes } from "./sharing.js"
 
 const idParamsSchema = z.object({ id: z.string().min(1).max(160) })
 const paginationSchema = z.object({
@@ -42,10 +43,10 @@ const describeMcpRoute = (options: McpDescribeRouteOptions) => describeRoute(opt
 type RouteVariables = Partial<OrganizationContextVariables> & Partial<Pick<AuthContextVariables, "session">>
 
 const about = [
-  "A personal agent belongs to the member who made it: a name, a Markdown brief that says who it is and how it works, and which of the member's connections and tools it may use.",
+  "A personal agent has an owner, a name, a brief that says how it works, and rules for which tools it can use.",
   "Every change to the brief or tool policy makes a new version.",
   "An agent does its work through routines. A routine is a Cloud Automation that belongs to the agent, so it also appears in the Automation capabilities; each run starts from the agent's brief and can use only what the agent's tool policy allows.",
-  "Only the owner sees or changes their agents.",
+  "The owner can share the agent with teammates. Managers can change the brief, routines, tool rules, and who can collaborate. Collaborators can use the agent but cannot change it. A teammate who starts a run uses their own connections and models. Runs are private.",
 ].join(" ")
 
 const notFound = { error: "personal_agent_not_found" as const }
@@ -57,6 +58,7 @@ function scope(c: { get(name: "organizationContext"): OrganizationContextVariabl
 
 function failure(error: unknown): { status: 400 | 403 | 404 | 409; body: { error: string; message?: string } } | null {
   if (error instanceof Error) {
+    if (error.message === "personal_agent_idempotency_conflict") return { status: 409, body: { error: error.message } }
     if (error.message === "personal_agent_not_found") return { status: 404, body: notFound }
     if (error.message === "personal_agent_tool_policy_connection_invalid") {
       return { status: 400, body: { error: error.message, message: "A tool policy can name only connectors added to this organization, by their connection id. Built-in connectors such as Google Workspace cannot be limited per agent yet." } }
@@ -117,7 +119,8 @@ export function registerPersonalAgentRoutes<T extends { Variables: RouteVariable
       summary: "Create a personal agent",
       description: `${about} Create one only when the person asks for an agent. Write the brief as Markdown from what they said: what the agent watches or does, how it decides, and how it reports. The agent does nothing until it has a routine; add one with createPersonalAgentRoutine.`,
       responses: {
-        201: jsonResponse("Agent created at version 1.", personalAgentDetailSchema),
+        201: jsonResponse("Agent created or returned from an earlier request.", personalAgentDetailSchema),
+        409: jsonResponse("This key was already used with a different name or brief.", notFoundSchema),
         400: jsonResponse("Invalid request.", invalidRequestSchema),
         404: jsonResponse("Personal agents are not turned on for this organization.", notFoundSchema),
       },
@@ -145,7 +148,10 @@ export function registerPersonalAgentRoutes<T extends { Variables: RouteVariable
     }),
     orgMemberRoute(), gate, paramValidator(idParamsSchema),
     async (c) => {
-      const agent = await service.get(scope(c), c.req.valid("param").id)
+      const caller = personalAgentCaller(c)
+      const access = await personalAgentAccess(caller, c.req.valid("param").id)
+      if (!access) return c.json(notFound, 404)
+      const agent = await service.get(personalAgentOwnerScope(access), access.agentId, caller.memberId)
       return agent ? c.json(agent) : c.json(notFound, 404)
     },
   )
@@ -158,6 +164,7 @@ export function registerPersonalAgentRoutes<T extends { Variables: RouteVariable
       description: `${about} Send only what changes. A new brief or tool policy replaces the old one whole, makes the next version, and applies to the agent's routines from their next run; a run already in progress keeps the version it started with. A rename alone keeps the version.`,
       responses: {
         200: jsonResponse("Agent updated.", personalAgentDetailSchema),
+        403: jsonResponse("You cannot make this change.", invalidRequestSchema),
         400: jsonResponse("Invalid request.", invalidRequestSchema),
         404: jsonResponse("Not found.", notFoundSchema),
       },
@@ -165,7 +172,16 @@ export function registerPersonalAgentRoutes<T extends { Variables: RouteVariable
     orgMemberRoute(), gate, paramValidator(idParamsSchema), jsonValidator(updatePersonalAgentSchema),
     async (c) => {
       try {
-        const updated = await service.update(scope(c), c.req.valid("param").id, c.req.valid("json"))
+        const caller = personalAgentCaller(c)
+        const access = await personalAgentAccess(caller, c.req.valid("param").id)
+        if (!access) return c.json(notFound, 404)
+        if (!canManagePersonalAgent(access.role)) return c.json(personalAgentForbidden("Only the owner or a manager can change this agent."), 403)
+        const changes = c.req.valid("json")
+        if (access.role !== "owner" && (changes.monthlyBudgetMicros !== undefined || changes.defaultExecutionTarget !== undefined)) {
+          return c.json(personalAgentForbidden("Only the owner can change the budget or where the agent runs."), 403)
+        }
+        addAuditRequestResource(c, { type: "personal_agent", id: access.agentId })
+        const updated = await service.update(personalAgentOwnerScope(access), access.agentId, changes, caller.memberId)
         return updated ? c.json(updated) : c.json(notFound, 404)
       } catch (error) {
         const mapped = failure(error)
@@ -181,11 +197,15 @@ export function registerPersonalAgentRoutes<T extends { Variables: RouteVariable
       tags: ["Personal agents"], operationId: "archivePersonalAgent", "x-mcp": true,
       summary: "Archive a personal agent",
       description: `${about} Archiving also archives the agent's routines, so nothing keeps running. Run history is kept.`,
-      responses: { 200: jsonResponse("Agent archived.", personalAgentDetailSchema), 404: jsonResponse("Not found.", notFoundSchema) },
+      responses: { 200: jsonResponse("Agent archived.", personalAgentDetailSchema), 403: jsonResponse("Only the owner can archive the agent.", invalidRequestSchema), 404: jsonResponse("Not found.", notFoundSchema) },
     }),
     orgMemberRoute(), gate, paramValidator(idParamsSchema),
     async (c) => {
-      const archived = await service.archive(scope(c), c.req.valid("param").id)
+      const access = await personalAgentAccess(personalAgentCaller(c), c.req.valid("param").id)
+      if (!access) return c.json(notFound, 404)
+      if (access.role !== "owner") return c.json(personalAgentForbidden("Only the owner can archive this agent."), 403)
+      addAuditRequestResource(c, { type: "personal_agent", id: access.agentId })
+      const archived = await service.archive(personalAgentOwnerScope(access), access.agentId)
       return archived ? c.json(archived) : c.json(notFound, 404)
     },
   )
@@ -199,7 +219,10 @@ export function registerPersonalAgentRoutes<T extends { Variables: RouteVariable
     }),
     orgMemberRoute(), gate, paramValidator(idParamsSchema),
     async (c) => {
-      const routines = await service.listRoutines(scope(c), c.req.valid("param").id)
+      const caller = personalAgentCaller(c)
+      const access = await personalAgentAccess(caller, c.req.valid("param").id)
+      if (!access) return c.json(notFound, 404)
+      const routines = await service.listRoutines(personalAgentOwnerScope(access), access.agentId, caller.memberId)
       return routines ? c.json(routines) : c.json(notFound, 404)
     },
   )
@@ -209,7 +232,7 @@ export function registerPersonalAgentRoutes<T extends { Variables: RouteVariable
     describeMcpRoute({
       tags: ["Personal agents"], operationId: "createPersonalAgentRoutine", "x-mcp": true,
       summary: "Give a personal agent a routine",
-      description: `${about} The routine is active as soon as it exists and runs in OpenWork Cloud on its schedule. Its instructions say what this routine does; do not repeat the brief in them. Change, pause, or archive it afterwards with the Automation capabilities, using the returned automation id.`,
+      description: `${about} The routine is active as soon as it exists and runs in OpenWork Cloud on its schedule. Its instructions say what this routine does; do not repeat the brief in them. Change or pause it with the personal agent routine update.`,
       responses: {
         201: jsonResponse("Routine created as an active Cloud Automation that carries the agent's id.", automationDetailSchema),
         400: jsonResponse("Invalid request.", invalidRequestSchema),
@@ -221,7 +244,11 @@ export function registerPersonalAgentRoutes<T extends { Variables: RouteVariable
     orgMemberRoute(), gate, paramValidator(idParamsSchema), jsonValidator(createPersonalAgentRoutineSchema),
     async (c) => {
       try {
-        const routine = await service.createRoutine(scope(c), c.req.valid("param").id, c.req.valid("json"))
+        const caller = personalAgentCaller(c)
+        const access = await personalAgentAccess(caller, c.req.valid("param").id)
+        if (!access) return c.json(notFound, 404)
+        if (!canManagePersonalAgent(access.role)) return c.json(personalAgentForbidden("Only the owner or a manager can add a routine."), 403)
+        const routine = await service.createRoutine(personalAgentOwnerScope(access), access.agentId, c.req.valid("json"), caller.memberId)
         if (!routine) return c.json(notFound, 404)
         addAuditRequestResource(c, { type: "automation", id: routine.automation.id })
         return c.json(routine, 201)
@@ -238,7 +265,7 @@ export function registerPersonalAgentRoutes<T extends { Variables: RouteVariable
     describeMcpRoute({
       tags: ["Personal agents"], operationId: "runPersonalAgentNow", "x-mcp": true,
       summary: "Run a personal agent now",
-      description: `${about} Starts one run of the agent's routine now, in addition to its schedule. Pass routineId when the agent has more than one routine. The run is an Automation run: follow it with getAutomationRun.`,
+      description: `${about} Starts one run of the agent's routine now, in addition to its schedule. Pass routineId when the agent has more than one routine. The run appears in your own run history.`,
       requestBody: {
         required: false,
         content: {
@@ -267,7 +294,13 @@ export function registerPersonalAgentRoutes<T extends { Variables: RouteVariable
         return c.json({ error: "invalid_request", message: validationIssuesMessage(body.error.issues), details: body.error.issues }, 400)
       }
       try {
-        const started = await service.runNow(scope(c), c.req.valid("param").id, body.data, { agentCaller: c.get("session")?.id === "mcp_internal" })
+        const caller = personalAgentCaller(c)
+        const access = await personalAgentAccess(caller, c.req.valid("param").id)
+        if (!access) return c.json(notFound, 404)
+        const started = await service.runNow(personalAgentOwnerScope(access), access.agentId, body.data, {
+          agentCaller: c.get("session")?.id === "mcp_internal",
+          actingMemberId: access.role === "owner" ? undefined : caller.memberId,
+        })
         if (!started) return c.json(notFound, 404)
         addAuditRequestResource(c, { type: "automation_run", id: started.run.id })
         return c.json(started, 202)
@@ -278,7 +311,7 @@ export function registerPersonalAgentRoutes<T extends { Variables: RouteVariable
       }
     },
   )
-  registerPersonalAgentSharingRoutes(app, gate)
+  registerPersonalAgentSharingRoutes(app, gate, service)
   registerPersonalAgentPermissionsRoutes(app, gate)
   registerPersonalAgentAdminRoutes(app, gate)
 }

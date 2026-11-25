@@ -5,17 +5,21 @@ import { toast } from "sonner";
 import { SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
 import { t } from "@/i18n";
 
+import { resolveAgentChatSession } from "./agent-chat-session";
 import { agentChatForAgent, useAgentChatStore, type AgentChat } from "./agent-chat-store";
 import { AgentFace } from "./agent-face";
+import { firstName } from "./agent-words";
 import { useAgentsRuntime } from "./agents-runtime";
-import { isActiveRun, useAgentListQuery, useAgentRoutinesQuery } from "./use-agents";
+import { isActiveRun, useAgentListQuery } from "./use-agents";
 
 type AgentRow = {
   key: string;
   name: string | null;
   agentId: string | null;
   chat: AgentChat | null;
-  working: boolean;
+  ownerName?: string;
+  needsAttention?: boolean;
+  working?: boolean;
 };
 
 function unusedDraft(chats: Record<string, AgentChat>, organizationId: string, workspaceId: string): AgentChat | null {
@@ -26,44 +30,62 @@ export function AgentSidebarSection() {
   const runtime = useAgentsRuntime();
   const chats = useAgentChatStore((state) => state.chats);
   const agents = useAgentListQuery(runtime).data;
-  const routines = useAgentRoutinesQuery(runtime).data;
   const open = useMutation({
     mutationFn: async (row: AgentRow | null) => {
       if (!runtime) return;
-      const chat = row ? row.chat : unusedDraft(useAgentChatStore.getState().chats, runtime.organizationId, runtime.workspaceId);
-      if (chat) {
-        if (await runtime.sessionState(chat.workspaceId, chat.sessionId) !== "gone") return runtime.openSession(chat.workspaceId, chat.sessionId);
-        useAgentChatStore.getState().forget(chat.sessionId);
-        if (row && !row.agentId) return;
+      const { organizationId, workspaceId, client } = runtime;
+      const store = useAgentChatStore.getState();
+      const agentId = row?.agentId;
+      if (agentId) {
+        const chat = agentChatForAgent(store.chats, organizationId, workspaceId, agentId);
+        const { sessionId, source } = await resolveAgentChatSession({
+          localSessionId: chat?.sessionId ?? null,
+          readPointer: async () => (await client.getPersonalAgentChat(organizationId, agentId, workspaceId)).chat?.sessionId ?? null,
+          sessionState: (id) => runtime.sessionState(workspaceId, id),
+          createSession: () => runtime.createSession(workspaceId),
+        });
+        if (!sessionId) throw new Error(t("agents.open_failed"));
+        store.open({ organizationId, workspaceId, sessionId, agentId, agentName: row.name });
+        if (source === "new") {
+          store.save(sessionId, { chatLinkPending: true });
+          if (row.name) runtime.renameSession(workspaceId, sessionId, row.name);
+        } else {
+          runtime.openSession(workspaceId, sessionId);
+        }
+        if (source === "new" || (source === "local" && chat?.chatLinkPending)) {
+          await client.setPersonalAgentChat(organizationId, agentId, { workspaceId, sessionId });
+          store.save(sessionId, { chatLinkPending: false });
+        }
+        return;
       }
-      const sessionId = await runtime.createSession(runtime.workspaceId);
+      const draft = row?.chat ?? unusedDraft(store.chats, organizationId, workspaceId);
+      if (draft) {
+        if (await runtime.sessionState(workspaceId, draft.sessionId) !== "gone") return runtime.openSession(workspaceId, draft.sessionId);
+        store.forget(draft.sessionId);
+        if (row) return;
+      }
+      const sessionId = await runtime.createSession(workspaceId);
       if (!sessionId) throw new Error(t("agents.open_failed"));
-      useAgentChatStore.getState().open({
-        organizationId: runtime.organizationId,
-        workspaceId: runtime.workspaceId,
-        sessionId,
-        ...(row?.agentId ? { agentId: row.agentId, agentName: row.name } : {}),
-      });
-      if (row?.name) runtime.renameSession(runtime.workspaceId, sessionId, row.name);
+      store.open({ organizationId, workspaceId, sessionId });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : t("agents.open_failed")),
+    onError: () => toast.error(t("agents.open_failed")),
   });
   if (!runtime) return null;
 
-  const active = (agents ?? []).filter((item) => item.agent.state === "active");
-  const known = new Set(active.map((item) => item.agent.id));
   const rows: AgentRow[] = [
-    ...active.map((item) => ({
+    ...(agents ?? []).filter((item) => item.agent.state === "active").map((item) => ({
       key: item.agent.id,
       name: item.agent.name,
       agentId: item.agent.id,
-      chat: agentChatForAgent(chats, runtime.organizationId, item.agent.id),
-      working: (routines?.get(item.agent.id) ?? []).some((routine) => isActiveRun(routine.latestRun)),
+      chat: agentChatForAgent(chats, runtime.organizationId, runtime.workspaceId, item.agent.id),
+      ownerName: item.role === "owner" ? undefined : firstName(item.owner?.name),
+      needsAttention: item.openRequestCount > 0,
+      working: item.routines.some((routine) => isActiveRun(routine.latestRun)),
     })),
     ...Object.values(chats)
-      .filter((chat) => chat.organizationId === runtime.organizationId && (chat.agentId === null || (agents === undefined && !known.has(chat.agentId))))
+      .filter((chat) => chat.organizationId === runtime.organizationId && chat.workspaceId === runtime.workspaceId && chat.agentId === null)
       .sort((a, b) => a.createdAt - b.createdAt)
-      .map((chat) => ({ key: chat.sessionId, name: chat.agentName, agentId: chat.agentId, chat, working: false })),
+      .map((chat) => ({ key: chat.sessionId, name: chat.agentName, agentId: null, chat })),
   ];
 
   return (
@@ -92,11 +114,14 @@ export function AgentSidebarSection() {
                 data-agent-name={row.name ?? ""}
                 isActive={row.chat !== null && row.chat.sessionId === runtime.selectedSessionId}
                 tooltip={row.name ?? t("agents.new")}
+                disabled={open.isPending}
                 onClick={() => open.mutate(row)}
               >
                 <AgentFace name={row.name} />
-                <span className="truncate">{row.name ?? t("agents.new")}</span>
-                {row.working ? <span role="status" aria-label={t("agents.row_working")} className="ml-auto size-1.5 shrink-0 animate-pulse rounded-full bg-blue-9" /> : null}
+                <span className="min-w-0 flex-1 truncate">{row.name ?? t("agents.new")}</span>
+                {row.ownerName ? <small className="max-w-20 truncate text-[11px] text-muted-foreground">{t("agents.row_from", { name: row.ownerName })}</small> : null}
+                {row.needsAttention ? <span role="img" aria-label={t("agents.row_needs_attention")} className="size-1.5 shrink-0 rounded-full bg-amber-9" />
+                  : row.working ? <span role="status" aria-label={t("agents.row_working")} className="size-1.5 shrink-0 animate-pulse rounded-full bg-blue-9" /> : null}
               </SidebarMenuButton>
             </SidebarMenuItem>
           ))}

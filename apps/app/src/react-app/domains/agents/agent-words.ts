@@ -26,6 +26,10 @@ function capitalized(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+export function firstName(name: string | null | undefined): string {
+  return name?.trim().split(/\s+/, 1)[0] ?? "";
+}
+
 export function scheduleInWords(schedule: AutomationSchedule): string {
   if (schedule.kind === "interval") {
     const parts = [schedule.everyHours === 1 ? t("agents.schedule_every_hour") : t("agents.schedule_every_hours", { count: schedule.everyHours })];

@@ -30,7 +30,7 @@ const COMPONENTS = {
 export function usePersonalAgentSessionExtensions(runtime: AgentsRuntime | null): SessionExtensions {
   const organizationId = runtime?.organizationId ?? null;
   const chats = useAgentChatStore((state) => state.chats);
-  const agents = useAgentListQuery(runtime).data;
+  const agents = useAgentListQuery(runtime, true).data;
   return useMemo(() => {
     if (!organizationId) {
       return { ...COMPONENTS, proposalCards: false, ownedSessionIds: NO_SESSION_IDS, hiddenSidebarSessionIds: NO_SESSION_IDS, composerPlaceholders: NO_PLACEHOLDERS };

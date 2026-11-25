@@ -13,11 +13,6 @@ export type PersonalAgentEventAction =
   | "request.asked" | "request.denied" | "request.allowed_once" | "request.always_allowed" | "request.approved"
   | "organization.tools_changed" | "organization.budget_set"
 
-/**
- * Records who changed what about an agent, for the admin's list. `detail`
- * holds small facts only (a name, a role, a tool): never a brief, tool
- * arguments or anything from a credential.
- */
 export async function recordPersonalAgentEvent(input: {
   organizationId: string
   agentId: string | null

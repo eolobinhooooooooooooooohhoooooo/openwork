@@ -31,9 +31,17 @@ export function startOnce(key: string, start: () => Promise<AgentStartProgress>)
   return started;
 }
 
+export async function agentProposalKey(sessionId: string, toolCallId: string): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify([sessionId, toolCallId]));
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return `proposal-${Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
 export async function startAgentFromProposal(input: {
   api: AgentStartApi;
   proposal: PersonalAgentProposal;
+  idempotencyKey?: string;
+  linkChat?: (agentId: string) => Promise<unknown>;
   saved: AgentStartProgress;
   save: (progress: Partial<AgentStartProgress>) => void;
 }): Promise<AgentStartProgress> {
@@ -44,12 +52,13 @@ export async function startAgentFromProposal(input: {
     save(next);
   };
   if (!progress.agentId) {
-    const created = await api.createAgent({ name: proposal.name, brief: proposal.brief });
+    const created = await api.createAgent({ name: proposal.name, brief: proposal.brief, never: proposal.never, idempotencyKey: input.idempotencyKey });
     keep({ agentId: created.agent.id, agentName: created.agent.name });
   }
   const agentId = progress.agentId;
   if (!agentId) return progress;
   if (!progress.routineId) {
+    await input.linkChat?.(agentId);
     const routine = await api.createRoutine(agentId, proposal.routine);
     keep({ routineId: routine.automation.id, routineName: routine.automation.name });
   }

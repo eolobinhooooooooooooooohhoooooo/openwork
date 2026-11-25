@@ -11,8 +11,8 @@ function resultText(run: AutomationRun, routineName: string): string {
   return t("agents.run_failed", { name: routineName, reason: run.error?.message.trim() || run.status });
 }
 
-export function AgentRunResult(props: { runtime: AgentsRuntime; runId: string; routineName: string }) {
-  const query = useAgentRunQuery(props.runtime, props.runId);
+export function AgentRunResult(props: { runtime: AgentsRuntime; agentId: string; runId: string; routineName: string; active?: boolean }) {
+  const query = useAgentRunQuery(props.runtime, props.agentId, props.runId, props.active ?? true);
   const receipt = query.data;
   if (query.isError && !receipt) {
     return <p data-agent-run={props.runId} data-agent-run-state="unavailable" data-agent-line className="text-[13px] leading-relaxed text-dls-secondary">{t("agents.run_unavailable", { name: props.routineName })}</p>;

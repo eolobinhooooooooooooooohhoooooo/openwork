@@ -311,11 +311,10 @@ test("running the agent now is a manual Automation run whose instructions start 
   assert.ok(prompt.indexOf(BRIEF_V2) < prompt.indexOf("Read today's reports in #bugs"), "the brief comes before the routine's task")
   assert.equal(receipt.revision.instructions, "Read today's reports in #bugs and file an issue for each new one.", "the routine itself stores only its task")
 
-  // With no tool policy the run is like any Automation run: every tool of Dana's connection, and it may create Automations.
   const found = names(await searchTracker(turns[0].mcpToken))
   for (const tool of ["list_bug_reports", "create_issue", "delete_issue"]) assert.ok(found.includes(capability(tool)), `${tool} in ${found.join(", ")}`)
   assert.deepEqual((await connectionTools(turns[0].mcpToken)).sort(), ["create_issue", "delete_issue", "list_bug_reports"])
-  assert.ok(names(await searchApi(turns[0].mcpToken, "create cloud automation")).includes("createCloudAutomation"))
+  assert.equal(names(await searchApi(turns[0].mcpToken, "create cloud automation")).includes("createCloudAutomation"), false)
 })
 
 test("a tool the agent's policy blocks is withheld from its next run, and only from that agent's runs", async () => {

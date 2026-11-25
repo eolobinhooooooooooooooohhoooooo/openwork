@@ -1567,7 +1567,8 @@ export function SessionPage(props: SessionPageProps) {
             data-session-header
             data-sidebar-hidden={!shellConfig.sidebar || !sidebarOpen || isMobile}
             className={cn(
-              "window-titlebar flex shrink-0 items-center justify-between gap-3 border-b border-border bg-dls-surface px-3 electron:titlebar-drag @container/titlebar lg:px-4 mac:bg-transparent",
+              "window-titlebar relative flex shrink-0 items-center justify-between gap-3 border-b border-border bg-dls-surface px-3 electron:titlebar-drag @container/titlebar lg:px-4 mac:bg-transparent",
+              "[&_[data-session-centered-title]]:absolute [&_[data-session-centered-title]]:left-1/2 [&_[data-session-centered-title]]:max-w-[32%] [&_[data-session-centered-title]]:-translate-x-1/2 lg:[&_[data-session-title-panel-open=true]]:left-[calc(50%-9.375rem)]",
               props.mainContentHeaderActionsRef ? "min-h-13" : "lg:pr-1",
               props.primarySurface !== "flat" && "lg:border-b-0",
               (!shellConfig.sidebar || !sidebarOpen || isMobile) && "mac:mac-window-controls-inset",

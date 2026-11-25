@@ -121,6 +121,7 @@ import { useOrgFeature } from "@/react-app/domains/cloud/use-org-feature";
 import { agentPromptNoteParts } from "@/react-app/domains/agents/agent-prompt-note";
 import { usePersonalAgentSessionExtensions } from "@/react-app/domains/agents/agents-extension";
 import { PersonalAgentsProvider, type AgentsRuntime } from "@/react-app/domains/agents/agents-runtime";
+import { useAgentNames } from "@/react-app/domains/agents/use-agents";
 import { SessionExtensionsProvider } from "@/react-app/kernel/session-extensions";
 import { automationProviderCatalog } from "@/react-app/domains/automations/automation-model-options";
 import { remoteThreadAttentionBySession, useRemoteThreadAttentionKey } from "@/react-app/domains/session/remote-threads/remote-thread-store";
@@ -2742,10 +2743,11 @@ export function SessionRoute() {
   }, [endpointForSessionWorkspace, reloadWorkspaceSessions, workspaces]);
 
   const agentsRuntime = useMemo<AgentsRuntime | null>(() => {
-    if (!personalAgentsEnabled || !agentsDen.ready || !agentsDen.client || !agentsDen.organizationId || !selectedWorkspaceId) return null;
+    if (!personalAgentsEnabled || !agentsDen.ready || !agentsDen.client || !agentsDen.organizationId || !denAuth.user?.id || !selectedWorkspaceId) return null;
     return {
       client: agentsDen.client,
       organizationId: agentsDen.organizationId,
+      principalId: denAuth.user.id,
       workspaceId: selectedWorkspaceId,
       selectedSessionId: selectedSessionId ?? null,
       createSession: (workspaceId) => handleCreateTaskInWorkspaceWithOpenMode(workspaceId, "primary"),
@@ -2762,8 +2764,9 @@ export function SessionRoute() {
         }
       },
     };
-  }, [agentsDen.client, agentsDen.organizationId, agentsDen.ready, handleCreateTaskInWorkspaceWithOpenMode, navigateToWorkspaceSession, opencodeClient, personalAgentsEnabled, renameSessionTitle, selectedSessionId, selectedWorkspaceId]);
+  }, [agentsDen.client, agentsDen.organizationId, agentsDen.ready, denAuth.user?.id, handleCreateTaskInWorkspaceWithOpenMode, navigateToWorkspaceSession, opencodeClient, personalAgentsEnabled, renameSessionTitle, selectedSessionId, selectedWorkspaceId]);
   const sessionExtensions = usePersonalAgentSessionExtensions(agentsRuntime);
+  const agentNames = useAgentNames(agentsRuntime);
 
   const createNewSessionInSelectedWorkspace = useCallback(() => {
     if (selectedWorkspaceId) handleCreateTaskInWorkspace(selectedWorkspaceId);
@@ -3984,6 +3987,7 @@ export function SessionRoute() {
       ) : automationsRouteActive ? (
         <AutomationsPage
           providerCatalog={automationCatalog}
+          agentNames={agentNames}
           workspaceId={selectedWorkspaceId}
           headerActionsTarget={automationsHeaderActionsTarget}
           onSignIn={() => handleOpenSettings("/settings/cloud-account")}

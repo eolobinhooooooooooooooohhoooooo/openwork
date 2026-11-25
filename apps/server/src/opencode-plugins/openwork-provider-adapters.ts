@@ -367,6 +367,7 @@ function agentContribution(): OpenworkFeatureContribution {
         arguments: [
           argument("name", "string", true, "Short name for the agent taken from its job, two or three words with only the first capitalized, e.g. \"Bug watcher\"."),
           argument("brief", "string", true, "The agent's standing brief as Markdown, written from what the person said: what it watches or does, how it decides, what it never does."),
+          argument("never", "array", false, 'Things the person said the agent must never do, each { app, action? } in their words, e.g. { app: "Slack", action: "post message" }. OpenWork turns them into blocked tools.'),
           argument("routine", "object", true, "Its first routine: { name (short, e.g. \"Check #bugs\"), instructions (what one run does), schedule }. The schedule is one of, with every number a JSON number and timezone an IANA zone: { kind: \"daily\", timezone, hour: 0-23, minute: 0-59 }; { kind: \"weekly\", timezone, daysOfWeek: [1,2,3,4,5] (numbers, 0 = Sunday), hour, minute }; { kind: \"interval\", timezone, everyHours: 1-24, daysOfWeek: [1,2,3,4,5], startHour: 0-23, endHour: 1-24 } for every few hours on the hour. Pick a sensible default yourself when the person named none."),
         ],
         effects: noEffects,
@@ -474,6 +475,7 @@ function mcpContribution(mcp: EngineMcpDescriptor): OpenworkFeatureContribution 
 export function buildOpenworkProviderContributions(
   skills: ConnectSkillDescriptor[],
   mcps: EngineMcpDescriptor[] = [],
+  personalAgentsEnabled = false,
 ): OpenworkFeatureContribution[] {
   const cloudMcp = mcps.find((mcp) => mcp.name === "openwork-cloud");
   const connect = connectContribution(skills, cloudMcp);
@@ -481,7 +483,7 @@ export function buildOpenworkProviderContributions(
     sessionContribution(),
     sessionGroupContribution(),
     automationContribution(),
-    agentContribution(),
+    ...(personalAgentsEnabled ? [agentContribution()] : []),
     extensionContribution(),
     ...mcps
       .filter((mcp) => mcp.name !== "openwork-cloud")

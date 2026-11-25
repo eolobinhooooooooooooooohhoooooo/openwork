@@ -9,10 +9,10 @@ import { isStandingChat, useAgentChatStore } from "./agent-chat-store";
 import { AgentChoices } from "./agent-choices";
 import { AgentFace } from "./agent-face";
 import { AgentRunResult } from "./agent-run-result";
-import { startAgentFromProposal, startOnce } from "./agent-start";
+import { agentProposalKey, startAgentFromProposal, startOnce } from "./agent-start";
 import { scheduleInWords, scheduleZone } from "./agent-words";
 import { useAgentsRuntime } from "./agents-runtime";
-import { agentsQueryRoot } from "./use-agents";
+import { agentListKey } from "./use-agents";
 
 export function AgentProposalCard(props: SessionProposalCardProps) {
   const runtime = useAgentsRuntime();
@@ -32,6 +32,8 @@ export function AgentProposalCard(props: SessionProposalCardProps) {
           runNow: (agentId, routineId) => runtime.client.runPersonalAgentNow(runtime.organizationId, agentId, { routineId }),
         },
         proposal,
+        idempotencyKey: await agentProposalKey(props.sessionId, props.part.toolCallId),
+        linkChat: (agentId) => runtime.client.setPersonalAgentChat(runtime.organizationId, agentId, { workspaceId: props.workspaceId, sessionId: props.sessionId }),
         saved: {
           agentId: saved?.agentId ?? null,
           agentName: saved?.agentName ?? null,
@@ -44,7 +46,7 @@ export function AgentProposalCard(props: SessionProposalCardProps) {
       if (progress.agentName) runtime.renameSession(props.workspaceId, props.sessionId, progress.agentName);
       return progress;
     }),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: agentsQueryRoot(runtime?.organizationId ?? null) }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: agentListKey(runtime?.organizationId ?? null) }),
   });
 
   if (!proposal) return null;
@@ -62,8 +64,8 @@ export function AgentProposalCard(props: SessionProposalCardProps) {
         <p data-agent-line className="text-[13px] leading-relaxed text-foreground">
           {chat.firstRunId ? t("agents.you_are_set") : t("agents.you_are_set_waiting")}
         </p>
-        {chat.firstRunId
-          ? <AgentRunResult runtime={runtime} runId={chat.firstRunId} routineName={chat.routineName ?? proposal.routine.name} />
+        {chat.firstRunId && chat.agentId
+          ? <AgentRunResult runtime={runtime} agentId={chat.agentId} runId={chat.firstRunId} routineName={chat.routineName ?? proposal.routine.name} />
           : (
             <AgentChoices
               description={failed}

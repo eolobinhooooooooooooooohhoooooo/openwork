@@ -5,6 +5,7 @@ import type { DenClient } from "@/app/lib/den";
 export type AgentsRuntime = {
   client: DenClient;
   organizationId: string;
+  principalId: string;
   workspaceId: string;
   selectedSessionId: string | null;
   createSession: (workspaceId: string) => Promise<string | null>;

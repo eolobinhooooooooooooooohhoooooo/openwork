@@ -15,11 +15,6 @@ export type PersonalAgentAccess = {
   pausedAt: number | null
 }
 
-/**
- * What a member may do with an agent: its owner, a manager, a collaborator, or
- * nothing (null). Every route and capability that takes an agent id starts
- * here; the answer never depends on anything the caller sent but the id.
- */
 export async function personalAgentAccess(caller: PersonalAgentCaller, agentId: string): Promise<PersonalAgentAccess | null> {
   if (!isDenTypeId("personalAgent", agentId)) return null
   const organizationId = normalizeDenTypeId("organization", caller.organizationId)
@@ -49,7 +44,6 @@ export function canManagePersonalAgent(role: PersonalAgentRole): boolean {
   return role === "owner" || role === "manager"
 }
 
-/** The scope the agent's routines are stored under: its owner's, whoever is asking. */
 export function personalAgentOwnerScope(access: PersonalAgentAccess) {
   return { organizationId: access.organizationId, ownerMemberId: access.ownerMemberId, modelAttentionCapable: true }
 }

@@ -1,4 +1,6 @@
-import { Clock, Play, X } from "lucide-react";
+import { useState } from "react";
+import type { PersonalAgentDetail } from "@openwork/types/den/personal-agents";
+import { Clock, Play, SlidersHorizontal, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -8,87 +10,105 @@ import { t } from "@/i18n";
 import { agentChatFor, useAgentChatStore } from "./agent-chat-store";
 import { AgentFace } from "./agent-face";
 import { AGENT_PANEL_ID } from "./agent-header";
-import { scheduleInWords, whenInWords } from "./agent-words";
-import { useAgentsRuntime } from "./agents-runtime";
-import { useAgentActions, useAgentRoutinesQuery } from "./use-agents";
+import { AgentSettings } from "./agent-settings";
+import { AgentShare } from "./agent-share";
+import { firstName, scheduleInWords, whenInWords } from "./agent-words";
+import { useAgentsRuntime, type AgentsRuntime } from "./agents-runtime";
+import { useAgentActions, useAgentDetail } from "./use-agents";
 
 export function AgentPanel(props: { sessionId: string | null }) {
   const runtime = useAgentsRuntime();
   const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime?.organizationId ?? null, props.sessionId));
   const open = useAgentChatStore((state) => state.panelSessionId !== null && state.panelSessionId === props.sessionId);
-  const routinesByAgent = useAgentRoutinesQuery(runtime).data;
-  const actions = useAgentActions(runtime);
-  const agentId = chat?.agentId;
-  if (!runtime || !chat || !agentId || !open) return null;
+  const agent = useAgentDetail(runtime, chat?.agentId);
+  if (!runtime || !chat || !agent || !open) return null;
+  return <AgentPanelBody key={chat.sessionId} runtime={runtime} agent={agent} />;
+}
 
-  const routines = routinesByAgent?.get(agentId) ?? [];
-  const on = routines.some((routine) => routine.automation.state === "active");
-  const nextDueAt = routines.flatMap((routine) => routine.automation.state === "active" && routine.automation.nextDueAt ? [routine.automation.nextDueAt] : []).sort((a, b) => a - b)[0];
-  const name = chat.agentName ?? t("agents.new");
+function AgentPanelBody({ runtime, agent }: { runtime: AgentsRuntime; agent: PersonalAgentDetail }) {
+  const [settings, setSettings] = useState(false);
+  const actions = useAgentActions(runtime);
+  const { id: agentId, name, pausedAt } = agent.agent;
+  const paused = pausedAt !== null;
+  const canManage = agent.role !== "collaborator";
+  const routines = agent.routines.filter((routine) => routine.state !== "archived");
+  const on = routines.some((routine) => routine.state === "active");
+  const nextDueAt = routines.flatMap((routine) => routine.state === "active" && routine.nextDueAt !== null ? [routine.nextDueAt] : []).sort((a, b) => a - b)[0];
   const firstRoutine = routines[0];
 
   return (
-    <aside id={AGENT_PANEL_ID} data-agent-panel={agentId} aria-label={name} className="hidden w-[300px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-dls-border bg-dls-surface px-4 pb-4 pt-2 lg:flex">
-      <div className="flex h-8 items-center justify-end">
-        <Button type="button" variant="ghost" size="icon-sm" aria-label={t("agents.panel_close")} onClick={() => useAgentChatStore.getState().setPanel(null)}>
-          <X className="size-4" />
-        </Button>
-      </div>
-      <div className="flex flex-col items-center gap-3">
-        <AgentFace name={name} size="lg" />
-        <p className="text-[15px] font-medium text-dls-text">{name}</p>
-      </div>
-      <label className="flex items-center justify-between gap-3 rounded-xl border border-dls-border px-3.5 py-2.5">
-        <span className="min-w-0">
-          <span className="block text-sm font-medium text-dls-text">{on ? t("agents.panel_on") : t("agents.panel_off")}</span>
-          <span className="block text-xs text-dls-secondary">
-            {!on ? t("agents.panel_paused") : nextDueAt ? t("agents.panel_next_run", { when: whenInWords(nextDueAt, Date.now()) }) : t("agents.panel_no_next_run")}
-          </span>
-        </span>
-        <Switch
-          size="sm"
-          checked={on}
-          disabled={routines.length === 0 || actions.setActive.isPending}
-          onCheckedChange={(active) => actions.setActive.mutate(
-            { routineIds: routines.map((routine) => routine.automation.id), active },
-            { onError: (error) => toast.error(error instanceof Error ? error.message : String(error)) },
-          )}
-        />
-      </label>
-      <section className="flex flex-col gap-2">
-        <h2 className="px-1 text-xs text-dls-secondary">{t("agents.panel_routines")}</h2>
-        {routines.length === 0 ? <p className="px-1 text-sm text-dls-secondary">{t("agents.panel_no_routines")}</p> : null}
-        {routines.map((routine) => (
-          <div key={routine.automation.id} data-agent-routine={routine.automation.id} className="flex items-center gap-3 rounded-xl border border-dls-border px-3.5 py-2.5">
-            <Clock aria-hidden="true" className="size-4 shrink-0 text-dls-secondary" />
+    <aside id={AGENT_PANEL_ID} data-agent-panel={agentId} aria-label={name} className="hidden w-75 shrink-0 flex-col gap-5 overflow-y-auto border-l border-dls-border bg-dls-surface px-4 pb-4 pt-2 lg:flex">
+      {settings ? <AgentSettings runtime={runtime} agent={agent} onBack={() => setSettings(false)} /> : <>
+        <div className="flex h-8 items-center justify-end">
+          <Button type="button" variant="ghost" size="icon-sm" aria-label={t("agents.panel_close")} onClick={() => useAgentChatStore.getState().setPanel(null)}>
+            <X className="size-4" />
+          </Button>
+        </div>
+        <div className="flex flex-col items-center gap-2">
+          <AgentFace name={name} size="lg" />
+          <p className="text-[15px] font-medium text-dls-text">{name}</p>
+          {agent.role !== "owner" && <p className="text-xs text-dls-secondary">{t("agents.panel_shared_role", {
+            name: firstName(agent.owner?.name) || t("agents.panel_agent_owner"),
+            role: agent.role === "manager" ? t("agents.share_manager") : t("agents.share_collaborator"),
+          })}</p>}
+        </div>
+        <div className="flex min-h-12 items-center justify-between gap-3 border-y border-dls-border py-2">
+          {paused ? <p className="text-sm font-medium">{t("agents.panel_admin_paused")}</p> : <>
             <span className="min-w-0">
-              <span className="block truncate text-sm font-medium text-dls-text">{routine.automation.name}</span>
-              <span className="block truncate text-xs text-dls-secondary">{scheduleInWords(routine.revision.schedule)}</span>
+              <span className="block text-sm font-medium text-dls-text">{on ? t("agents.panel_on") : t("agents.panel_off")}</span>
+              <span className="block text-xs text-dls-secondary">
+                {!on ? t("agents.panel_paused") : nextDueAt !== undefined ? t("agents.panel_next_run", { when: whenInWords(nextDueAt, Date.now()) }) : t("agents.panel_no_next_run")}
+              </span>
             </span>
-          </div>
-        ))}
-      </section>
-      {firstRoutine ? (
-        <div>
+            <Switch
+              aria-label={t("agents.panel_schedule_switch")}
+              title={!canManage ? t("agents.panel_schedule_readonly") : undefined}
+              size="sm"
+              checked={on}
+              disabled={!canManage || routines.length === 0 || actions.setActive.isPending}
+              onCheckedChange={(active) => actions.setActive.mutate(
+                { agentId, routineIds: routines.map((routine) => routine.id), active },
+                { onError: () => toast.error(t("agents.panel_schedule_failed")) },
+              )}
+            />
+          </>}
+        </div>
+        <section className="flex flex-col">
+          <h2 className="pb-1 text-xs text-dls-secondary">{t("agents.panel_routines")}</h2>
+          {routines.length === 0 ? <p className="text-sm text-dls-secondary">{t("agents.panel_no_routines")}</p> : null}
+          {routines.map((routine) => (
+            <div key={routine.id} data-agent-routine={routine.id} className="flex min-h-11 items-center gap-3 border-b border-dls-border py-2 last:border-b-0">
+              <Clock aria-hidden="true" className="size-4 shrink-0 text-dls-secondary" />
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium text-dls-text">{routine.name}</span>
+                <span className="block truncate text-xs text-dls-secondary">{scheduleInWords(routine.schedule)}</span>
+              </span>
+            </div>
+          ))}
+        </section>
+        <div className="flex flex-wrap gap-1">
           <Button
             type="button"
             variant="outline"
             size="sm"
             data-agent-run-now
-            disabled={actions.runNow.isPending}
+            disabled={paused || !firstRoutine || actions.runNow.isPending}
             onClick={() => actions.runNow.mutate(
-              { agentId, routineId: firstRoutine.automation.id },
+              { agentId, routineId: firstRoutine?.id },
               {
                 onSuccess: () => toast.success(t("agents.panel_run_started")),
-                onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+                onError: () => toast.error(t("agents.panel_run_failed")),
               },
             )}
           >
-            <Play className="size-3.5" />
-            {t("agents.panel_run_now")}
+            <Play aria-hidden="true" />{t("agents.panel_run_now")}
+          </Button>
+          {canManage && <AgentShare runtime={runtime} agent={agent} />}
+          <Button type="button" variant="ghost" size="sm" onClick={() => setSettings(true)}>
+            <SlidersHorizontal aria-hidden="true" />{t("agents.panel_settings_button")}
           </Button>
         </div>
-      ) : null}
+      </>}
     </aside>
   );
 }
