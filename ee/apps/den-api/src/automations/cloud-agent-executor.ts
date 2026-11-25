@@ -87,7 +87,6 @@ export type CloudAgentExecutorInput = OwnerScope & {
   signal: AbortSignal
   onAdmitted: (receipt: Record<string, unknown>) => Promise<void>
   workspaceId?: string | null
-  /** Scopes that take connections or tools away from this run's credential. Only the headless runtime applies them. */
   mcpScopes?: readonly string[]
 }
 

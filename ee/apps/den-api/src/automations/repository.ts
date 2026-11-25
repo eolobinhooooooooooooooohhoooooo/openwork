@@ -294,7 +294,6 @@ export class DenAutomationRepository implements AutomationRepository {
     return rows.map((row) => row.id)
   }
   async create(input: Parameters<AutomationRepository["create"]>[0] & {
-    /** The personal agent this Automation is a routine of. It runs with the agent's current version. */
     agent?: { agentId: string }
   }): Promise<AutomationListItem> {
     const definition = normalizedDefinition(input.definition)
@@ -535,6 +534,11 @@ export class DenAutomationRepository implements AutomationRepository {
         ? currentState === "active" || currentState === "inactive"
         : currentState === "active"
       if (!canRun) throw new Error("automation_not_active")
+      const repinned = locked[0]?.agent_id && locked[0].current_revision_id !== input.revision.id
+        ? await tx.select().from(AutomationRevisionTable)
+            .where(eq(AutomationRevisionTable.id, locked[0].current_revision_id)).limit(1)
+        : []
+      const revision = repinned[0] ? mapRevision(repinned[0]) : input.revision
       const identity = automationOccurrenceIdentity({
         automationId: input.automation.id,
         scheduledFor: input.scheduledFor,
@@ -552,7 +556,7 @@ export class DenAutomationRepository implements AutomationRepository {
       const newCloudThreadId = createDenTypeId("automationThread")
       const nextDueAt = input.trigger === "manual"
         ? input.automation.nextDueAt
-        : nextAutomationOccurrence(input.revision.schedule, input.scheduledFor ?? input.now)
+        : nextAutomationOccurrence(revision.schedule, input.scheduledFor ?? input.now)
       const claimDeadlineAt = computeAutomationClaimDeadline({
         trigger: input.trigger,
         now: input.now,
@@ -562,12 +566,12 @@ export class DenAutomationRepository implements AutomationRepository {
       await tx.insert(AutomationRunTable).values({
         id: newRunId,
         automation_id: normalizeAutomationId(input.automation.id),
-        revision_id: normalizeRevisionId(input.revision.id),
+        revision_id: normalizeRevisionId(revision.id),
         trigger: input.trigger,
         scheduled_for: date(input.scheduledFor),
         idempotency_key: identity.idempotencyKey,
         status: overlap ? "skipped" : "queued",
-        execution_target: input.revision.executionTarget ?? "desktop",
+        execution_target: revision.executionTarget ?? "desktop",
         claim_deadline_at: overlap ? null : new Date(claimDeadlineAt),
         lease_owner: null,
         lease_expires_at: null,
@@ -578,9 +582,9 @@ export class DenAutomationRepository implements AutomationRepository {
         engine_receipt: null,
         engine_sequence: 0,
         engine_admitted_at: null,
-        provider_id: input.revision.model.providerId,
-        model_id: input.revision.model.modelId,
-        model_variant: input.revision.model.variant ?? null,
+        provider_id: revision.model.providerId,
+        model_id: revision.model.modelId,
+        model_variant: revision.model.variant ?? null,
         finished_at: overlap ? new Date(input.now) : null,
         error: null,
         result_summary: overlap ? "Skipped because another occurrence is already active." : null,
@@ -589,7 +593,7 @@ export class DenAutomationRepository implements AutomationRepository {
         created_at: new Date(input.now),
         updated_at: new Date(input.now),
       })
-      if (!overlap && (input.revision.executionTarget ?? "desktop") === "desktop") {
+      if (!overlap && (revision.executionTarget ?? "desktop") === "desktop") {
         await tx.insert(AutomationRunnerNotificationTable).values({
           organization_id: normalizeOrganizationId(input.automation.organizationId),
           owner_member_id: normalizeMemberId(input.automation.ownerMemberId),
@@ -607,7 +611,7 @@ export class DenAutomationRepository implements AutomationRepository {
       if (!runRows[0]) throw new Error("automation_run_not_durable")
       return overlap
         ? { kind: "overlap", run: mapRun(runRows[0]) }
-        : { kind: "claimed", run: mapRun(runRows[0]), revision: input.revision }
+        : { kind: "claimed", run: mapRun(runRows[0]), revision }
     })
   }
 
@@ -1734,36 +1738,30 @@ export const automationRepository = new DenAutomationRepository()
 
 type AutomationTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
-/** A personal agent's routines: the owner's unarchived Automations that carry its id, newest first. */
 export async function listAgentRoutines(input: {
   organizationId: string
   ownerMemberId: string
   agentId: string
+  limit: number
 }): Promise<AutomationListItem[]> {
   const rows = await db.$primary.select().from(AutomationTable).where(and(
     eq(AutomationTable.agent_id, normalizeDenTypeId("personalAgent", input.agentId)),
     eq(AutomationTable.organization_id, normalizeOrganizationId(input.organizationId)),
     eq(AutomationTable.owner_member_id, normalizeMemberId(input.ownerMemberId)),
     ne(AutomationTable.state, "archived"),
-  )).orderBy(desc(AutomationTable.id)).limit(100)
+  )).orderBy(desc(AutomationTable.id)).limit(input.limit)
   return itemsFromRows(rows)
 }
 
-/**
- * Moves every unarchived routine of an agent to a new agent version, inside
- * the transaction that created that version. Each routine gets a new revision,
- * so runs already claimed keep the brief and tool policy they started with.
- */
 export async function repinAgentRoutines(tx: AutomationTransaction, input: {
   agentId: string
   agentRevisionId: string
   now: number
 }): Promise<number> {
   const agentRevisionId = normalizeDenTypeId("personalAgentRevision", input.agentRevisionId)
-  const routines = await tx.select().from(AutomationTable).where(and(
-    eq(AutomationTable.agent_id, normalizeDenTypeId("personalAgent", input.agentId)),
-    ne(AutomationTable.state, "archived"),
-  )).orderBy(asc(AutomationTable.id)).for("update")
+  const routines = await tx.select().from(AutomationTable)
+    .where(eq(AutomationTable.agent_id, normalizeDenTypeId("personalAgent", input.agentId)))
+    .orderBy(asc(AutomationTable.id)).for("update")
   for (const routine of routines) {
     const [current] = await tx.select().from(AutomationRevisionTable)
       .where(eq(AutomationRevisionTable.id, routine.current_revision_id)).limit(1)
@@ -1795,7 +1793,6 @@ export async function repinAgentRoutines(tx: AutomationTransaction, input: {
   return routines.length
 }
 
-/** Archives an agent's routines with it, so nothing keeps running for an agent that no longer exists. */
 export async function archiveAgentRoutines(tx: AutomationTransaction, input: { agentId: string; now: number }): Promise<void> {
   await tx.update(AutomationTable).set({
     state: "archived",

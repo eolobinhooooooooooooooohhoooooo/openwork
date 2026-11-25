@@ -58,6 +58,9 @@ function failure(error: unknown): { status: 400 | 403 | 404 | 409; body: { error
     if (error.message === "personal_agent_tool_policy_connection_invalid") {
       return { status: 400, body: { error: error.message, message: "A tool policy can name only connectors added to this organization, by their connection id. Built-in connectors such as Google Workspace cannot be limited per agent yet." } }
     }
+    if (error.message === "personal_agent_tool_policy_too_large") {
+      return { status: 400, body: { error: error.message, message: "This tool policy blocks more than a run can carry. Block the whole connection instead of many of its tools." } }
+    }
     if (error.message === "personal_agent_routine_required") {
       return { status: 409, body: { error: error.message, message: "This agent has no routine yet. Create a routine for it, then run it." } }
     }
@@ -188,7 +191,7 @@ export function registerPersonalAgentRoutes<T extends { Variables: RouteVariable
     "/v1/personal-agents/:id/routines",
     describeMcpRoute({
       tags: ["Personal agents"], operationId: "listPersonalAgentRoutines", "x-mcp": true,
-      summary: "List a personal agent's routines", description: about,
+      summary: "List a personal agent's routines", description: `${about} Returns the 100 newest routines.`,
       responses: { 200: jsonResponse("Routines returned, newest first.", personalAgentRoutineListSchema), 404: jsonResponse("Not found.", notFoundSchema) },
     }),
     orgMemberRoute(), gate, paramValidator(idParamsSchema),

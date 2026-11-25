@@ -51,6 +51,14 @@ export const contentAuditRoutes: readonly AuditRouteDeclaration[] = [
 
   member("GET", "/v1/workflow-runs", "tenant_read", "workflow_run.list", "workflow.run", "workflow_run", null, { notes: "Owners and admins; run receipts with tool call names, status and error text. No inputs or results." }),
 
+  member("GET", "/v1/personal-agents", "tenant_access", "personal_agent.list", "personal_agent.management", "personal_agent", null, { notes: `Returns the caller's own agents with their briefs; never capture a brief. ${MCP_NATIVE}` }),
+  member("POST", "/v1/personal-agents", "tenant_change", "personal_agent.create", "personal_agent.management", "personal_agent", null, { notes: `Request carries the brief; never capture it. ${MCP_NATIVE}` }),
+  member("GET", "/v1/personal-agents/:id", "tenant_access", "personal_agent.read", "personal_agent.management", "personal_agent", "id", { notes: `Returns the brief; never capture it. ${MCP_NATIVE}` }),
+  member("PATCH", "/v1/personal-agents/:id", "tenant_change", "personal_agent.update", "personal_agent.management", "personal_agent", "id", { notes: `A new brief or tool policy makes the next version and moves the agent's routines to it. Never capture the brief. ${MCP_NATIVE}` }),
+  member("DELETE", "/v1/personal-agents/:id", "tenant_change", "personal_agent.archive", "personal_agent.management", "personal_agent", "id", { notes: `DELETE archives the agent and its routines. ${MCP_NATIVE}` }),
+  member("GET", "/v1/personal-agents/:id/routines", "tenant_access", "personal_agent.routine.list", "personal_agent.management", "personal_agent", "id", { notes: `Returns automation instructions of the agent's routines. ${MCP_NATIVE}` }),
+  member("POST", "/v1/personal-agents/:id/routines", "tenant_change", "personal_agent.routine.create", "personal_agent.management", "personal_agent", "id", { notes: `Same automationService.create as POST /v1/cloud-automations, with the agent's id on the Automation. ${MCP_NATIVE}` }),
+  member("POST", "/v1/personal-agents/:id/run", "tenant_job", "personal_agent.run.start", "automation.run", "personal_agent", "id", { jobOutcome: DESKTOP_RUN_OUTCOME, notes: `Same automationService.runNow as POST /v1/automations/:id/run for one of the agent's routines; returns 202. ${MCP_NATIVE}` }),
   member("GET", "/v1/automations/:id/sharing", "tenant_read", "automation.sharing.read", "automation.management", "automation", "id", { notes: MCP_NATIVE }),
   member("PUT", "/v1/automations/:id/sharing", "tenant_change", "automation.sharing.update", "automation.management", "automation", "id", { notes: MCP_NATIVE }),
   member("GET", "/v1/shared-automations", "tenant_access", "automation.shared.list", "automation.management", "automation", null, { notes: `Definition-only shared access; never capture instructions. ${MCP_NATIVE}` }),

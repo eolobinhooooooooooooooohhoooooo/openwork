@@ -9,7 +9,8 @@ import { publicRoute, tokenRoute } from "../middleware/index.js"
 import { jsonResponse } from "../openapi.js"
 import { getMcpResourceContext, verifyMcpRequest } from "./auth.js"
 import { buildMcpCatalog, getToolDescription, loadOpenApiDocument, type CatalogApp, type McpToolOperation } from "./catalog.js"
-import { filterPersonalAgents } from "./catalog-availability.js"
+import { filterPersonalAgents, limitedAgentRunMayCall } from "./catalog-availability.js"
+import { isLimitedAgentRun } from "./workbot-turn-limits.js"
 import { organizationFeatureEnabled } from "../features.js"
 import { invokeMcpOperation } from "./invoke.js"
 import { preflightMcpJsonRpcRequest } from "./json-rpc-preflight.js"
@@ -87,10 +88,12 @@ export function registerMcpRoutes<T extends { Variables: RequestIdVariables & Re
       protocolVersionLogger.warn(message, fields)
     })
 
-    const catalog = filterPersonalAgents(
-      await getCatalog(app as unknown as Hono, c.env),
+    const catalog = await getCatalog(app as unknown as Hono, c.env)
+    const limitedAgentRun = isLimitedAgentRun(principal.scopes)
+    const offered = filterPersonalAgents(
+      catalog,
       await organizationFeatureEnabled(principal.organizationId, "personalAgents", { userId: principal.userId }),
-    )
+    ).filter((operation) => !limitedAgentRun || limitedAgentRunMayCall(operation))
     const server = new McpServer({
       name: "openwork-den-api",
       version: "1.0.0",
@@ -111,7 +114,7 @@ export function registerMcpRoutes<T extends { Variables: RequestIdVariables & Re
         }),
       },
       async ({ query, limit }) => {
-        const matches = searchCapabilities(catalog, query, limit ?? 5)
+        const matches = searchCapabilities(offered, query, limit ?? 5)
         const text = matches.length > 0
           ? JSON.stringify({ matches }, null, 2)
           : JSON.stringify({ matches: [], hint: "No matches. Try broader or different keywords." }, null, 2)
@@ -119,7 +122,7 @@ export function registerMcpRoutes<T extends { Variables: RequestIdVariables & Re
       },
     )
 
-    for (const operation of catalog) {
+    for (const operation of offered) {
       server.registerTool(
         operation.name,
         {

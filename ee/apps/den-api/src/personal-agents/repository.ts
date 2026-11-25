@@ -50,7 +50,6 @@ function sortedRecord<T>(record: Record<string, T>, value: (entry: T) => unknown
   return Object.keys(record).sort().map((key) => [key, value(record[key])])
 }
 
-/** The same definition always hashes the same, whatever order its keys arrived in. */
 function definitionDigest(definition: Definition): string {
   return createHash("sha256").update(JSON.stringify([
     definition.brief,
@@ -132,11 +131,6 @@ export const personalAgentRepository = {
     return created
   },
 
-  /**
-   * A change to the brief, tool policy, default placement or budget makes the
-   * next version and moves the agent's routines to it in the same transaction.
-   * A rename alone keeps the version.
-   */
   async update(input: Scope & {
     agentId: string
     changes: UpdatePersonalAgent
@@ -211,7 +205,6 @@ export const personalAgentRepository = {
     return (await details(rows))[0] ?? null
   },
 
-  /** Archiving the agent archives its routines with it, in one transaction. */
   async archive(input: Scope & { agentId: string; now: number }): Promise<PersonalAgentDetail | null> {
     if (!isDenTypeId("personalAgent", input.agentId)) return null
     const found = await db.transaction(async (tx) => {
@@ -227,7 +220,6 @@ export const personalAgentRepository = {
     return found ? this.get(input) : null
   },
 
-  /** What a run pinned to one agent version starts from. Null when the version or its agent is gone. */
   async runDefinition(agentRevisionId: string): Promise<{
     agentId: string
     agentName: string

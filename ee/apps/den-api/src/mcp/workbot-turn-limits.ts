@@ -2,9 +2,16 @@ import type { AgentSourcesPolicy } from "@openwork/types/den/workbot-proactive"
 
 const WITHOUT_CONNECTION_SCOPE_PREFIX = "openwork:workbot-without-connection:"
 const WITHOUT_TOOL_SCOPE_PREFIX = "openwork:agent-without-tool:"
+const LIMITED_AGENT_RUN_SCOPE = "openwork:agent-run-limited"
 
 export function isWorkbotTurnLimitScope(scope: string): boolean {
-  return scope.startsWith(WITHOUT_CONNECTION_SCOPE_PREFIX) || scope.startsWith(WITHOUT_TOOL_SCOPE_PREFIX)
+  return scope.startsWith(WITHOUT_CONNECTION_SCOPE_PREFIX)
+    || scope.startsWith(WITHOUT_TOOL_SCOPE_PREFIX)
+    || scope === LIMITED_AGENT_RUN_SCOPE
+}
+
+export function isLimitedAgentRun(scopes: ReadonlySet<string>): boolean {
+  return scopes.has(LIMITED_AGENT_RUN_SCOPE)
 }
 
 export function headlessRunTokenScopes(input: { readOnly?: boolean; scopes?: readonly string[] }): string[] {
@@ -20,26 +27,26 @@ export function workbotTurnLimitScopes(policy: Pick<AgentSourcesPolicy, "connect
 export function connectionsWithheld(scopes: ReadonlySet<string>): ReadonlySet<string> | undefined {
   const ids = new Set<string>()
   for (const scope of scopes) {
-    if (!isWorkbotTurnLimitScope(scope)) continue
+    if (!scope.startsWith(WITHOUT_CONNECTION_SCOPE_PREFIX)) continue
     const id = scope.slice(WITHOUT_CONNECTION_SCOPE_PREFIX.length)
     if (id) ids.add(id)
   }
   return ids.size ? ids : undefined
 }
 
-/**
- * Scopes that take connections and single tools away from one run's
- * credential. They only ever narrow what the owner could already use.
- */
 export function agentToolLimitScopes(blocks: {
   connections: readonly string[]
   tools: readonly { connectionId: string; toolName: string }[]
 }): string[] {
+  if (blocks.connections.length === 0 && blocks.tools.length === 0) return []
   return [
+    LIMITED_AGENT_RUN_SCOPE,
     ...blocks.connections.map((connectionId) => `${WITHOUT_CONNECTION_SCOPE_PREFIX}${connectionId}`),
     ...blocks.tools.map((tool) => `${WITHOUT_TOOL_SCOPE_PREFIX}${encodeURIComponent(tool.connectionId)}/${encodeURIComponent(tool.toolName)}`),
   ]
 }
+
+export const LIMITED_AGENT_RUN_MESSAGE = "This run belongs to an agent whose owner limited its tools, so it cannot start other work or change Automations and agents."
 
 export function toolsWithheld(scopes: ReadonlySet<string>): ReadonlyMap<string, ReadonlySet<string>> | undefined {
   const byConnection = new Map<string, Set<string>>()

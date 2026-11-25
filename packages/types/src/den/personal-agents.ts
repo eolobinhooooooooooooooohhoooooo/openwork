@@ -5,23 +5,27 @@ import {
   automationModelSchema,
   automationRunSchema,
   automationScheduleSchema,
-} from "../automations"
+} from "@openwork/types/automations"
 
 const idSchema = z.string().trim().min(1).max(160)
 const timestampSchema = z.number().int().nonnegative()
 
 export const PERSONAL_AGENT_NAME_MAX_LENGTH = 120
-export const PERSONAL_AGENT_BRIEF_MAX_LENGTH = 60_000
+export const PERSONAL_AGENT_BRIEF_MAX_LENGTH = 20_000
+/** A run's prompt is the brief plus the routine's instructions, and has to fit the runner's 100,000 characters. */
+export const PERSONAL_AGENT_ROUTINE_INSTRUCTIONS_MAX_LENGTH = 60_000
 export const PERSONAL_AGENT_TOOL_POLICY_MAX_CONNECTIONS = 100
 export const PERSONAL_AGENT_TOOL_POLICY_MAX_TOOLS = 200
-/** Every blocked tool is one entry on the run's credential, so the whole policy stays small enough to carry. */
-export const PERSONAL_AGENT_TOOL_POLICY_MAX_BLOCKED = 400
+export const PERSONAL_AGENT_TOOL_POLICY_MAX_BLOCKED = 200
+/** Every block is one scope on the run's credential, which stores at most 64 KiB of them. */
+export const PERSONAL_AGENT_TOOL_POLICY_MAX_SCOPE_CHARACTERS = 32_000
 
 export const personalAgentAccessSchema = z.enum(["allow", "block"]).meta({ ref: "PersonalAgentAccess" })
 export type PersonalAgentAccess = z.infer<typeof personalAgentAccessSchema>
 
 const connectionIdSchema = z.string().trim().min(1).max(160)
-const toolNameSchema = z.string().trim().min(1).max(200)
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+const toolNameSchema = z.string().min(1).max(128).refine((name) => !LONE_SURROGATE.test(name), "Expected well-formed text")
 
 /**
  * What an agent may use of its owner's connections while it runs unattended.
@@ -129,13 +133,15 @@ export type UpdatePersonalAgent = z.infer<typeof updatePersonalAgentSchema>
  */
 export const createPersonalAgentRoutineSchema = z.object({
   name: z.string().trim().min(1).max(120),
-  instructions: z.string().trim().min(1).max(100_000)
+  instructions: z.string().trim().min(1).max(PERSONAL_AGENT_ROUTINE_INSTRUCTIONS_MAX_LENGTH)
     .describe("What this routine does each time it runs. The agent's brief is added in front of it."),
   schedule: automationScheduleSchema,
   model: automationModelSchema.optional()
     .describe("Omit to run on the organization's cloud default model."),
 }).strict().meta({ ref: "CreatePersonalAgentRoutine" })
 export type CreatePersonalAgentRoutine = z.infer<typeof createPersonalAgentRoutineSchema>
+
+export const PERSONAL_AGENT_ROUTINE_LIST_LIMIT = 100
 
 export const personalAgentRoutineListSchema = z.object({
   items: z.array(automationDetailSchema),

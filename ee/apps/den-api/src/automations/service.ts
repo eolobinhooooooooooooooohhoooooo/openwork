@@ -40,6 +40,7 @@ import type { CloudAgentExecution, CloudAgentExecutorInput } from "./cloud-agent
 import { cloudAutomationRuntime, HEADLESS_AGENT_ENGINE_KIND, type CloudAutomationRuntime } from "./headless-runtime.js"
 import { automationTargetAllowed } from "./organization-availability.js"
 import { CalendarTriggerSource, type CalendarTriggerSourceDeps } from "./calendar-trigger-source.js"
+import { PERSONAL_AGENT_ROUTINE_INSTRUCTIONS_MAX_LENGTH } from "@openwork/types/den/personal-agents"
 import { normalizeDenTypeId } from "@openwork-ee/utils/typeid"
 import { appLogger } from "../observability/logger.js"
 import { agentToolLimitScopes } from "../mcp/workbot-turn-limits.js"
@@ -76,21 +77,23 @@ function readableBy(scope: OwnerScope, schedule: AutomationSchedule) {
 export type AutomationPlacementOptions = { agentCaller?: boolean }
 export type AutomationCreateOptions = {
   initialState?: "inactive"
-  /** Makes the new Automation a routine of this personal agent, run with the agent's current version. */
   agent?: { agentId: string }
 }
 
-/**
- * A personal agent's routine runs in OpenWork Cloud as an agent: that is where
- * its brief is added and its tool policy is applied to the run's credential.
- */
-function requireAgentRoutinePlacement(
+function requireAgentRoutineRunsAsCloudAgent(
   automation: { agentId?: string | null },
   target: AutomationExecutionTarget,
   action: AutomationAction | undefined,
 ) {
   if (!automation.agentId) return
   if (target !== "cloud" || action?.kind !== "agent") throw new Error("personal_agent_routine_cloud_agent_only")
+  if (action.instructions.length > PERSONAL_AGENT_ROUTINE_INSTRUCTIONS_MAX_LENGTH) throw new Error("personal_agent_routine_instructions_too_long")
+}
+
+async function requireRoutineAgentActive(scope: OwnerScope, automation: { agentId?: string | null }) {
+  if (!automation.agentId) return
+  const agent = await personalAgentRepository.get({ ...scope, agentId: automation.agentId })
+  if (agent?.agent.state !== "active") throw new Error("personal_agent_archived")
 }
 export type AutomationRunNowOptions = AutomationPlacementOptions & {
   executionTarget?: AutomationExecutionTarget
@@ -373,7 +376,7 @@ export class AutomationService {
       await this.requireNewModel(scope, definition.model, "desktop")
     }
     if (options.agent) {
-      requireAgentRoutinePlacement(
+      requireAgentRoutineRunsAsCloudAgent(
         { agentId: options.agent.agentId },
         "action" in definition ? definition.executionTarget : "desktop",
         "action" in definition ? definition.action : undefined,
@@ -397,7 +400,8 @@ export class AutomationService {
     this.requireScheduleAllowed(scope, changes.schedule ?? current.revision.schedule, nextTarget, current.revision.schedule)
     const moved = nextTarget !== currentTarget
     const nextAction = changes.action ?? current.revision.action
-    requireAgentRoutinePlacement(current.automation, nextTarget, nextAction)
+    requireAgentRoutineRunsAsCloudAgent(current.automation, nextTarget, nextAction)
+    await requireRoutineAgentActive(scope, current.automation)
     if (nextTarget === "desktop" && nextAction?.kind === "saved_script") {
       throw new Error("automation_action_target_mismatch")
     }
@@ -427,10 +431,7 @@ export class AutomationService {
   async activate(scope: OwnerScope, automationId: string) {
     const current = await this.get(scope, automationId)
     if (!current) return null
-    if (current.automation.agentId) {
-      const agent = await personalAgentRepository.get({ ...scope, agentId: current.automation.agentId })
-      if (!agent || agent.agent.state === "archived") throw new Error("personal_agent_archived")
-    }
+    await requireRoutineAgentActive(scope, current.automation)
     if ((current.revision.executionTarget ?? "desktop") === "cloud") {
       await this.requireCloudRuntimeAccess(scope)
     }
@@ -452,7 +453,9 @@ export class AutomationService {
     return activated ? this.reconcileModelAttention(activated, scope) : null
   }
 
-  deactivate(scope: OwnerScope, automationId: string) {
+  async deactivate(scope: OwnerScope, automationId: string) {
+    const current = await automationRepository.get({ ...scope, automationId })
+    if (current) await requireRoutineAgentActive(scope, current.automation)
     return automationRepository.setState({ ...scope, automationId, state: "inactive", now: Date.now() })
   }
 
@@ -465,7 +468,8 @@ export class AutomationService {
     if (!current || current.automation.state === "archived") return null
     const savedTarget = current.revision.executionTarget ?? "desktop"
     const target = options.executionTarget ?? savedTarget
-    requireAgentRoutinePlacement(current.automation, target, current.revision.action)
+    requireAgentRoutineRunsAsCloudAgent(current.automation, target, current.revision.action)
+    await requireRoutineAgentActive(scope, current.automation)
     if (target !== savedTarget) await this.requireTargetMove(scope, current.revision.action, target, options)
     else {
       await this.requireTargetAllowed(scope.organizationId, target)
@@ -979,11 +983,7 @@ export class AutomationService {
     return true
   }
 
-  /**
-   * What a routine's run takes from the agent version it is pinned to. A run
-   * that cannot be given the agent's brief and tool limits does not start.
-   */
-  private async agentRun(agentRevisionId: string, engineKind: string): Promise<
+  private async pinnedAgentForRun(agentRevisionId: string, engineKind: string): Promise<
     | { ok: true; agentName: string; brief: string; mcpScopes: string[] }
     | { ok: false; code: "execution_failed" | "execution_runtime_unavailable"; message: string }
   > {
@@ -1021,7 +1021,7 @@ export class AutomationService {
     }
 
     const agentRun = claimed.revision.agentRevisionId
-      ? await this.agentRun(claimed.revision.agentRevisionId, engineKind)
+      ? await this.pinnedAgentForRun(claimed.revision.agentRevisionId, engineKind)
       : null
     if (agentRun && !agentRun.ok) {
       await this.completeCloud({

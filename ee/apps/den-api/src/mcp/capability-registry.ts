@@ -13,6 +13,7 @@ import type { AuditServiceActionName } from "../audit/service-actions.js"
 import { isPlatformAdminUserId } from "../middleware/admin.js"
 import { mcpPrincipalCredentialId, type McpPrincipal } from "./auth.js"
 import { catalogOperationAvailableToCapabilities, filterGmailThreadRead, filterPersonalAgents } from "./catalog-availability.js"
+import { isLimitedAgentRun, LIMITED_AGENT_RUN_MESSAGE } from "./workbot-turn-limits.js"
 import type { McpToolOperation } from "./catalog.js"
 import {
   executeAdminCapability,
@@ -142,6 +143,7 @@ export type CapabilityRegistryContext = {
   redirectUriBase: string
   generatedArtifactViewsEnabled: boolean
   managedDeploymentsEnabled: boolean
+  limitedAgentRun: boolean
   remoteSessionAnswersAllowed: boolean
   remoteSessionAttachAllowed: boolean
   resolvePlatformAdmin: () => Promise<boolean>
@@ -191,6 +193,7 @@ export function createCapabilityRegistryContext(input: CapabilityRegistryContext
     redirectUriBase: input.redirectUriBase,
     generatedArtifactViewsEnabled: input.generatedArtifactViewsEnabled,
     managedDeploymentsEnabled: input.organizationFeatures.managedDeployments === true,
+    limitedAgentRun: isLimitedAgentRun(input.principal.scopes),
     remoteSessionAnswersAllowed: input.usageSource === "agent",
     remoteSessionAttachAllowed: input.usageSource === "agent",
     resolvePlatformAdmin,
@@ -745,6 +748,7 @@ const remoteSessionSource: CapabilitySource = {
     if (!parsedForKind(parsed, "remoteSession")) return unknownCapabilityResult(input.name)
     if (parsed.action === "answer" && !ctx.remoteSessionAnswersAllowed) return unknownCapabilityResult(input.name)
     if (parsed.action === "attach" && !ctx.remoteSessionAttachAllowed) return unknownCapabilityResult(input.name)
+    if (ctx.limitedAgentRun) return capabilityErrorResult({ error: "policy_blocked", message: LIMITED_AGENT_RUN_MESSAGE })
     if (!ctx.member) {
       return capabilityErrorResult({
         error: "membership_required",

@@ -108,7 +108,6 @@ export function mcpMemberForToken<T extends McpMemberIdentity>(member: T, scopes
   }
 }
 
-/** True when this run's credential leaves out one tool of a connection the run may otherwise use. */
 export function externalMcpToolWithheld(
   member: Pick<McpMemberIdentity, "withheldTools"> | null | undefined,
   connectionId: string,
