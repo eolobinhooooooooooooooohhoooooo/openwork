@@ -18,6 +18,10 @@ type AgentRow = {
   working: boolean;
 };
 
+function unusedDraft(chats: Record<string, AgentChat>, organizationId: string, workspaceId: string): AgentChat | null {
+  return Object.values(chats).find((chat) => chat.organizationId === organizationId && chat.workspaceId === workspaceId && !chat.agentId && !chat.asked) ?? null;
+}
+
 export function AgentSidebarSection() {
   const runtime = useAgentsRuntime();
   const chats = useAgentChatStore((state) => state.chats);
@@ -26,7 +30,8 @@ export function AgentSidebarSection() {
   const open = useMutation({
     mutationFn: async (row: AgentRow | null) => {
       if (!runtime) return;
-      if (row?.chat) return runtime.openSession(row.chat.workspaceId, row.chat.sessionId);
+      const chat = row ? row.chat : unusedDraft(useAgentChatStore.getState().chats, runtime.organizationId, runtime.workspaceId);
+      if (chat) return runtime.openSession(chat.workspaceId, chat.sessionId);
       const sessionId = await runtime.createSession(runtime.workspaceId);
       if (!sessionId) throw new Error(t("agents.open_failed"));
       useAgentChatStore.getState().open({
@@ -80,6 +85,7 @@ export function AgentSidebarSection() {
               <SidebarMenuButton
                 type="button"
                 data-agent-row={row.agentId ?? "new"}
+                data-agent-name={row.name ?? ""}
                 isActive={row.chat !== null && row.chat.sessionId === runtime.selectedSessionId}
                 tooltip={row.name ?? t("agents.new")}
                 onClick={() => open.mutate(row)}

@@ -10,7 +10,9 @@ import { AgentPanel } from "./agent-panel";
 import { AgentProposalCard } from "./agent-proposal-card";
 import { AgentSidebarSection } from "./agent-sidebar-section";
 import { AgentTranscriptFooter } from "./agent-transcript-footer";
+import { AgentTranscriptFrame } from "./agent-transcript-frame";
 import { useAgentsRuntime } from "./agents-runtime";
+import { useAgentListQuery } from "./use-agents";
 
 function useOwnsSession(sessionId: string | null): boolean {
   const runtime = useAgentsRuntime();
@@ -28,12 +30,16 @@ function useComposerPlaceholder(sessionId: string | null): string | null {
 }
 
 function useSidebarHiddenSessionIds(): ReadonlySet<string> {
-  const organizationId = useAgentsRuntime()?.organizationId ?? null;
+  const runtime = useAgentsRuntime();
+  const organizationId = runtime?.organizationId ?? null;
   const chats = useAgentChatStore((state) => state.chats);
-  return useMemo(
-    () => new Set(Object.values(chats).filter((chat) => chat.organizationId === organizationId).map((chat) => chat.sessionId)),
-    [chats, organizationId],
-  );
+  const agents = useAgentListQuery(runtime).data;
+  return useMemo(() => {
+    const listed = agents ? new Set(agents.filter((item) => item.agent.state === "active").map((item) => item.agent.id)) : null;
+    return new Set(Object.values(chats)
+      .filter((chat) => chat.organizationId === organizationId && (chat.agentId === null || listed === null || listed.has(chat.agentId)))
+      .map((chat) => chat.sessionId));
+  }, [agents, chats, organizationId]);
 }
 
 export const personalAgentSessionExtensions: SessionExtensions = {
@@ -41,6 +47,7 @@ export const personalAgentSessionExtensions: SessionExtensions = {
   HeaderTitle: AgentHeaderTitle,
   Greeting: AgentGreeting,
   ProposalCard: AgentProposalCard,
+  TranscriptFrame: AgentTranscriptFrame,
   TranscriptFooter: AgentTranscriptFooter,
   Panel: AgentPanel,
   useOwnsSession,

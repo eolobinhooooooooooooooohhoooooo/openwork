@@ -31,6 +31,7 @@ import {
 import { automationProposalSchema } from "@openwork/types/automations";
 import { personalAgentProposalSchema } from "@openwork/types/den/personal-agents";
 import { withOnceTimestamp } from "../automation-proposal-input.js";
+import { withNumberedWeekdays } from "../agent-proposal-input.js";
 import { SESSION_TREE_QUERY_ID, sessionLinkMetadata, type SessionLink } from "@openwork/types/session-link";
 import {
   appendAgentInstructions,
@@ -1614,7 +1615,7 @@ function proposePersonalAgent(rawArgs: unknown): object {
   return {
     ok: true,
     kind: "agent-proposal",
-    proposal: personalAgentProposalSchema.parse(rawArgs),
+    proposal: personalAgentProposalSchema.parse(withNumberedWeekdays(rawArgs)),
     created: false,
     limitation: "Nothing exists yet. The card asks the person \"Start like this?\"; the agent, its routine and its first run start only when they say yes. End your turn after the card; do not create the agent yourself.",
   };

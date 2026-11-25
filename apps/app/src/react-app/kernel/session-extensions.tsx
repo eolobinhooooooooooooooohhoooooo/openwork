@@ -19,6 +19,7 @@ export type SessionExtensions = {
   HeaderTitle: ComponentType<{ sessionId: string | null; children: ReactNode }>;
   Greeting: ComponentType<SessionGreetingProps>;
   ProposalCard: ComponentType<SessionProposalCardProps>;
+  TranscriptFrame: ComponentType<{ sessionId: string; children: ReactNode }>;
   TranscriptFooter: ComponentType<{ sessionId: string }>;
   Panel: ComponentType<{ sessionId: string | null }>;
   useOwnsSession: (sessionId: string | null) => boolean;
@@ -41,6 +42,7 @@ const NO_SESSION_EXTENSIONS: SessionExtensions = {
   HeaderTitle: Passthrough,
   Greeting: Nothing,
   ProposalCard: Nothing,
+  TranscriptFrame: Passthrough,
   TranscriptFooter: Nothing,
   Panel: Nothing,
   useOwnsSession: () => false,

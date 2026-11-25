@@ -2650,7 +2650,7 @@ export default {
   "agents.starter_watch": "Watch a Slack channel and file what's missing",
   "agents.starter_watch_prompt": "Watch #bugs in Slack. For each new bug, check Linear and file it if it's missing.",
   "agents.starter_morning": "Send me a summary every morning",
-  "agents.starter_morning_prompt": "Every weekday morning, read my unread email and Slack mentions and tell me what needs me today.",
+  "agents.starter_morning_prompt": "Every weekday morning, read my Slack mentions and my open Linear issues and tell me what needs me today.",
   "agents.starter_follow": "Keep an eye on something every hour",
   "agents.starter_follow_prompt": "Every hour during the workday, check ",
   "agents.starter_else": "Something else",

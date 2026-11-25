@@ -58,7 +58,7 @@ export function AgentProposalCard(props: SessionProposalCardProps) {
           <Clock aria-hidden="true" className="size-3.5" />
           {t("agents.created_routine", { name: chat.routineName ?? proposal.routine.name })}
         </p>
-        <p className="text-[15px] leading-6 text-dls-text">
+        <p data-agent-line className="text-[13px] leading-relaxed text-foreground">
           {chat.firstRunId ? t("agents.you_are_set") : t("agents.you_are_set_waiting")}
         </p>
         {chat.firstRunId

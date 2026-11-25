@@ -15,9 +15,8 @@ export function AgentRunResult(props: { runtime: AgentsRuntime; runId: string; r
   const receipt = useAgentRunQuery(props.runtime, props.runId).data;
   if (!receipt || isActiveRun(receipt.run)) {
     return (
-      <p data-agent-run={props.runId} data-agent-run-state="working" className="flex items-center gap-2 text-sm text-dls-secondary">
-        <span aria-hidden="true" className="size-1.5 animate-pulse rounded-full bg-blue-9" />
-        <span className="animate-pulse">{t("agents.run_working", { name: props.routineName })}</span>
+      <p data-agent-run={props.runId} data-agent-run-state="working" data-agent-line className="animate-pulse text-[13px] leading-relaxed text-dls-secondary">
+        {t("agents.run_working", { name: props.routineName })}
       </p>
     );
   }
@@ -25,7 +24,7 @@ export function AgentRunResult(props: { runtime: AgentsRuntime; runId: string; r
   const finishedAt = receipt.run.finishedAt ?? receipt.run.updatedAt;
   return (
     <div data-agent-run={props.runId} data-agent-run-state={receipt.run.status} className="flex flex-col gap-1.5">
-      <p className="whitespace-pre-wrap text-[15px] leading-6 text-dls-text">{resultText(receipt.run, props.routineName)}</p>
+      <p data-agent-line className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground">{resultText(receipt.run, props.routineName)}</p>
       <p className="text-xs text-dls-secondary">
         {[props.routineName, timeOfDay(finishedAt), steps > 0 ? t("agents.run_steps", { count: steps }) : null].filter(Boolean).join(" · ")}
       </p>

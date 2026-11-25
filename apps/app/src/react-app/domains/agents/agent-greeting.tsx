@@ -3,7 +3,6 @@ import { t } from "@/i18n";
 
 import { agentChatFor, useAgentChatStore } from "./agent-chat-store";
 import { AgentChoices } from "./agent-choices";
-import { AgentFace } from "./agent-face";
 import { useAgentsRuntime } from "./agents-runtime";
 
 const STARTERS = ["watch", "morning", "follow"] as const;
@@ -14,11 +13,8 @@ export function AgentGreeting(props: SessionGreetingProps) {
   if (!chat || chat.agentId) return null;
   return (
     <div data-agent-greeting className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-2 pt-6 md:px-10">
-      <div className="flex items-start gap-3">
-        <AgentFace name={null} className="mt-0.5" />
-        <p className="text-[15px] leading-6 text-dls-text">{t("agents.greeting")}</p>
-      </div>
-      <div className="pl-8">
+      <p data-agent-line className="text-[13px] leading-relaxed text-foreground">{t("agents.greeting")}</p>
+      <div>
         <AgentChoices
           choices={[
             ...STARTERS.map((starter) => ({

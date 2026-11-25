@@ -3814,7 +3814,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
             ) : props.chatPane === "secondary" && snapshot && renderedMessages.length === 0 ? (
               null
             ) : (
-              <>
+              <extensions.TranscriptFrame sessionId={props.sessionId}>
               {snapshot && renderedMessages.length === 0 ? <extensions.Greeting sessionId={props.sessionId} setPrompt={handleMessageListSetPrompt} /> : null}
               <DevProfiler id="MessageList">
                 <OpenTargetProvider
@@ -3890,7 +3890,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
                 </OpenTargetProvider>
               </DevProfiler>
               {renderedMessages.length > 0 ? <extensions.TranscriptFooter sessionId={props.sessionId} /> : null}
-              </>
+              </extensions.TranscriptFrame>
             )}
             </SessionHistoryBoundary>
             {renderedMessages.length === 0 ? threadQuestionCard : null}
