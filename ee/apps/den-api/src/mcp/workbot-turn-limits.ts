@@ -1,9 +1,10 @@
 import type { AgentSourcesPolicy } from "@openwork/types/den/workbot-proactive"
 
 const WITHOUT_CONNECTION_SCOPE_PREFIX = "openwork:workbot-without-connection:"
+const WITHOUT_TOOL_SCOPE_PREFIX = "openwork:agent-without-tool:"
 
 export function isWorkbotTurnLimitScope(scope: string): boolean {
-  return scope.startsWith(WITHOUT_CONNECTION_SCOPE_PREFIX)
+  return scope.startsWith(WITHOUT_CONNECTION_SCOPE_PREFIX) || scope.startsWith(WITHOUT_TOOL_SCOPE_PREFIX)
 }
 
 export function headlessRunTokenScopes(input: { readOnly?: boolean; scopes?: readonly string[] }): string[] {
@@ -25,5 +26,42 @@ export function connectionsWithheld(scopes: ReadonlySet<string>): ReadonlySet<st
   }
   return ids.size ? ids : undefined
 }
+
+/**
+ * Scopes that take connections and single tools away from one run's
+ * credential. They only ever narrow what the owner could already use.
+ */
+export function agentToolLimitScopes(blocks: {
+  connections: readonly string[]
+  tools: readonly { connectionId: string; toolName: string }[]
+}): string[] {
+  return [
+    ...blocks.connections.map((connectionId) => `${WITHOUT_CONNECTION_SCOPE_PREFIX}${connectionId}`),
+    ...blocks.tools.map((tool) => `${WITHOUT_TOOL_SCOPE_PREFIX}${encodeURIComponent(tool.connectionId)}/${encodeURIComponent(tool.toolName)}`),
+  ]
+}
+
+export function toolsWithheld(scopes: ReadonlySet<string>): ReadonlyMap<string, ReadonlySet<string>> | undefined {
+  const byConnection = new Map<string, Set<string>>()
+  for (const scope of scopes) {
+    if (!scope.startsWith(WITHOUT_TOOL_SCOPE_PREFIX)) continue
+    const [connectionPart, toolPart, ...rest] = scope.slice(WITHOUT_TOOL_SCOPE_PREFIX.length).split("/")
+    if (!connectionPart || !toolPart || rest.length) continue
+    let connectionId: string
+    let toolName: string
+    try {
+      connectionId = decodeURIComponent(connectionPart)
+      toolName = decodeURIComponent(toolPart)
+    } catch {
+      continue
+    }
+    const tools = byConnection.get(connectionId) ?? new Set<string>()
+    tools.add(toolName)
+    byConnection.set(connectionId, tools)
+  }
+  return byConnection.size ? byConnection : undefined
+}
+
+export const AGENT_TOOL_WITHHELD_MESSAGE = "is turned off for this agent. Its owner decides that in the agent's settings."
 
 export const WORKBOT_CONNECTION_WITHHELD_MESSAGE = "isn't allowed for Workbot in your organization. An admin decides that in Workbot's settings."

@@ -41,6 +41,7 @@ import {
   AutomationRunEventTable,
   AutomationRunTable,
   AutomationTable,
+  PersonalAgentTable,
 } from "@openwork-ee/den-db/schema"
 import { createDenTypeId, normalizeDenTypeId } from "@openwork-ee/utils/typeid"
 import { db } from "../db.js"
@@ -49,6 +50,7 @@ import { automationAffectedRows, automationUpdateChangedRows } from "./update-re
 import { cloudArtifactStateUpdate } from "./cloud-artifact-state.js"
 
 type AutomationRow = typeof AutomationTable.$inferSelect
+type AgentRow = typeof PersonalAgentTable.$inferSelect
 type RevisionRow = typeof AutomationRevisionTable.$inferSelect
 type RunRow = typeof AutomationRunTable.$inferSelect
 type EventRow = typeof AutomationRunEventTable.$inferSelect
@@ -107,6 +109,7 @@ function mapAutomation(row: AutomationRow): Automation {
     latestSuccessfulRunId: row.latest_successful_run_id,
     latestSuccessfulResult: row.latest_successful_result,
     needsAttentionReason: row.needs_attention_reason ?? null,
+    ...(row.agent_id ? { agentId: row.agent_id } : {}),
     createdAt: row.created_at.getTime(),
     updatedAt: row.updated_at.getTime(),
     archivedAt: ms(row.archived_at),
@@ -129,6 +132,7 @@ function mapRevision(row: RevisionRow): AutomationRevision {
     action,
     executionTarget: row.execution_target,
     workspaceId: row.workspace_id ?? null,
+    ...(row.agent_revision_id ? { agentRevisionId: row.agent_revision_id } : {}),
     maximumRuntimeMs: row.maximum_runtime_ms,
     digest: row.digest,
     createdAt: row.created_at.getTime(),
@@ -289,23 +293,30 @@ export class DenAutomationRepository implements AutomationRepository {
     )).orderBy(asc(AutomationRunTable.created_at), asc(AutomationRunTable.id)).limit(input.limit)
     return rows.map((row) => row.id)
   }
-  async create(input: Parameters<AutomationRepository["create"]>[0]): Promise<AutomationListItem> {
+  async create(input: Parameters<AutomationRepository["create"]>[0] & {
+    /** The personal agent this Automation is a routine of. It runs with the agent's current version. */
+    agent?: { agentId: string }
+  }): Promise<AutomationListItem> {
     const definition = normalizedDefinition(input.definition)
     const now = new Date(input.now)
     const newAutomationId = createDenTypeId("automation")
     const newRevisionId = createDenTypeId("automationRevision")
     const maximumRuntimeMs = AUTOMATION_DEFAULT_MAXIMUM_RUNTIME_MS
-    const digest = automationRevisionDigest({
-      instructions: definition.instructions,
-      schedule: definition.schedule,
-      model: definition.model,
-      action: definition.action,
-      executionTarget: definition.executionTarget,
-      maximumRuntimeMs,
-      ...(definition.workspaceId ? { workspaceId: definition.workspaceId } : {}),
-    })
+    const organizationId = normalizeOrganizationId(input.organizationId)
+    const ownerMemberId = normalizeMemberId(input.ownerMemberId)
     const nextDueAt = nextDueForSubmittedSchedule(definition.schedule, input.now)
     await db.transaction(async (tx) => {
+      let agent: { id: AgentRow["id"]; revisionId: AgentRow["current_revision_id"] } | null = null
+      if (input.agent) {
+        const [owned] = await tx.select().from(PersonalAgentTable).where(and(
+          eq(PersonalAgentTable.id, normalizeDenTypeId("personalAgent", input.agent.agentId)),
+          eq(PersonalAgentTable.organization_id, organizationId),
+          eq(PersonalAgentTable.owner_member_id, ownerMemberId),
+          eq(PersonalAgentTable.state, "active"),
+        )).limit(1).for("share")
+        if (!owned) throw new Error("personal_agent_not_found")
+        agent = { id: owned.id, revisionId: owned.current_revision_id }
+      }
       await tx.insert(AutomationRevisionTable).values({
         id: newRevisionId,
         automation_id: newAutomationId,
@@ -320,19 +331,30 @@ export class DenAutomationRepository implements AutomationRepository {
         action: definition.action,
         execution_target: definition.executionTarget,
         workspace_id: definition.workspaceId,
+        agent_revision_id: agent?.revisionId ?? null,
         maximum_runtime_ms: maximumRuntimeMs,
-        digest,
+        digest: automationRevisionDigest({
+          instructions: definition.instructions,
+          schedule: definition.schedule,
+          model: definition.model,
+          action: definition.action,
+          executionTarget: definition.executionTarget,
+          maximumRuntimeMs,
+          ...(definition.workspaceId ? { workspaceId: definition.workspaceId } : {}),
+          ...(agent ? { agentRevisionId: agent.revisionId } : {}),
+        }),
         created_at: now,
       })
       await tx.insert(AutomationTable).values({
         id: newAutomationId,
-        organization_id: normalizeOrganizationId(input.organizationId),
-        owner_member_id: normalizeMemberId(input.ownerMemberId),
+        organization_id: organizationId,
+        owner_member_id: ownerMemberId,
         name: definition.name,
         state: input.initialState ?? "active",
         current_revision_id: newRevisionId,
         next_due_at: input.initialState === "inactive" ? null : date(nextDueAt),
         needs_attention_reason: null,
+        agent_id: agent?.id ?? null,
         archived_at: null,
         created_at: now,
         updated_at: now,
@@ -394,6 +416,7 @@ export class DenAutomationRepository implements AutomationRepository {
         executionTarget,
         maximumRuntimeMs: current.maximum_runtime_ms,
         ...(workspaceId ? { workspaceId } : {}),
+        ...(current.agent_revision_id ? { agentRevisionId: current.agent_revision_id } : {}),
       })
       if (digest === current.digest) {
         await tx.update(AutomationTable).set({
@@ -416,6 +439,7 @@ export class DenAutomationRepository implements AutomationRepository {
         action,
         execution_target: executionTarget,
         workspace_id: workspaceId,
+        agent_revision_id: current.agent_revision_id,
         maximum_runtime_ms: current.maximum_runtime_ms,
         digest,
         created_at: new Date(input.now),
@@ -1707,3 +1731,80 @@ export class DenAutomationRepository implements AutomationRepository {
 }
 
 export const automationRepository = new DenAutomationRepository()
+
+type AutomationTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+/** A personal agent's routines: the owner's unarchived Automations that carry its id, newest first. */
+export async function listAgentRoutines(input: {
+  organizationId: string
+  ownerMemberId: string
+  agentId: string
+}): Promise<AutomationListItem[]> {
+  const rows = await db.$primary.select().from(AutomationTable).where(and(
+    eq(AutomationTable.agent_id, normalizeDenTypeId("personalAgent", input.agentId)),
+    eq(AutomationTable.organization_id, normalizeOrganizationId(input.organizationId)),
+    eq(AutomationTable.owner_member_id, normalizeMemberId(input.ownerMemberId)),
+    ne(AutomationTable.state, "archived"),
+  )).orderBy(desc(AutomationTable.id)).limit(100)
+  return itemsFromRows(rows)
+}
+
+/**
+ * Moves every unarchived routine of an agent to a new agent version, inside
+ * the transaction that created that version. Each routine gets a new revision,
+ * so runs already claimed keep the brief and tool policy they started with.
+ */
+export async function repinAgentRoutines(tx: AutomationTransaction, input: {
+  agentId: string
+  agentRevisionId: string
+  now: number
+}): Promise<number> {
+  const agentRevisionId = normalizeDenTypeId("personalAgentRevision", input.agentRevisionId)
+  const routines = await tx.select().from(AutomationTable).where(and(
+    eq(AutomationTable.agent_id, normalizeDenTypeId("personalAgent", input.agentId)),
+    ne(AutomationTable.state, "archived"),
+  )).orderBy(asc(AutomationTable.id)).for("update")
+  for (const routine of routines) {
+    const [current] = await tx.select().from(AutomationRevisionTable)
+      .where(eq(AutomationRevisionTable.id, routine.current_revision_id)).limit(1)
+    if (!current) throw new Error("automation_revision_not_found")
+    const mapped = mapRevision(current)
+    const newRevisionId = createDenTypeId("automationRevision")
+    await tx.insert(AutomationRevisionTable).values({
+      ...current,
+      id: newRevisionId,
+      version: current.version + 1,
+      agent_revision_id: agentRevisionId,
+      digest: automationRevisionDigest({
+        instructions: mapped.instructions,
+        schedule: mapped.schedule,
+        model: mapped.model,
+        action: mapped.action,
+        executionTarget: current.execution_target,
+        maximumRuntimeMs: current.maximum_runtime_ms,
+        ...(current.workspace_id ? { workspaceId: current.workspace_id } : {}),
+        agentRevisionId,
+      }),
+      created_at: new Date(input.now),
+    })
+    await tx.update(AutomationTable).set({
+      current_revision_id: newRevisionId,
+      updated_at: new Date(input.now),
+    }).where(eq(AutomationTable.id, routine.id))
+  }
+  return routines.length
+}
+
+/** Archives an agent's routines with it, so nothing keeps running for an agent that no longer exists. */
+export async function archiveAgentRoutines(tx: AutomationTransaction, input: { agentId: string; now: number }): Promise<void> {
+  await tx.update(AutomationTable).set({
+    state: "archived",
+    next_due_at: null,
+    archived_at: new Date(input.now),
+    needs_attention_reason: null,
+    updated_at: new Date(input.now),
+  }).where(and(
+    eq(AutomationTable.agent_id, normalizeDenTypeId("personalAgent", input.agentId)),
+    ne(AutomationTable.state, "archived"),
+  ))
+}

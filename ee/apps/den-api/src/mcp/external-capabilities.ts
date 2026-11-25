@@ -47,7 +47,7 @@ import { compareCapabilityMatches, scoreText, tokenize } from "./search.js"
 import { EXTERNAL_MCP_SEARCH_CONNECTION_LIMIT, scoreExternalTool, selectExternalMcpSearchConnections } from "./external-search-selection.js"
 import type { CapabilityMatch, CapabilityToolAnnotations } from "./search.js"
 import { AGENT_SOURCE_BLOCKED_MESSAGE, agentMayUseExternalTool, agentReadAllowlist, type AgentReadAllowlist } from "./agent-read-sources.js"
-import { connectionsWithheld, WORKBOT_CONNECTION_WITHHELD_MESSAGE } from "./workbot-turn-limits.js"
+import { AGENT_TOOL_WITHHELD_MESSAGE, connectionsWithheld, toolsWithheld, WORKBOT_CONNECTION_WITHHELD_MESSAGE } from "./workbot-turn-limits.js"
 import { DEN_MCP_WRITE_SCOPE } from "./scopes.js"
 import {
   codemodeScriptPath,
@@ -87,6 +87,7 @@ export type McpMemberIdentity = {
   orgMembershipId: DenTypeId<"member">
   teamIds: DenTypeId<"team">[]
   withheldConnectionIds?: ReadonlySet<string>
+  withheldTools?: ReadonlyMap<string, ReadonlySet<string>>
 }
 
 export async function resolveMcpMemberIdentity(input: {
@@ -98,7 +99,22 @@ export async function resolveMcpMemberIdentity(input: {
 
 export function mcpMemberForToken<T extends McpMemberIdentity>(member: T, scopes: ReadonlySet<string>): T {
   const withheldConnectionIds = connectionsWithheld(scopes)
-  return withheldConnectionIds ? { ...member, withheldConnectionIds } : member
+  const withheldTools = toolsWithheld(scopes)
+  if (!withheldConnectionIds && !withheldTools) return member
+  return {
+    ...member,
+    ...(withheldConnectionIds ? { withheldConnectionIds } : {}),
+    ...(withheldTools ? { withheldTools } : {}),
+  }
+}
+
+/** True when this run's credential leaves out one tool of a connection the run may otherwise use. */
+export function externalMcpToolWithheld(
+  member: Pick<McpMemberIdentity, "withheldTools"> | null | undefined,
+  connectionId: string,
+  toolName: string,
+): boolean {
+  return member?.withheldTools?.get(connectionId)?.has(toolName) === true
 }
 
 export function externalMcpConnectionHold(
@@ -836,6 +852,7 @@ async function probeExternalMcpConnection(input: {
 
   for (const tool of tools) {
     if (isToolDisabled(connection.toolPolicy, tool.name)) continue
+    if (externalMcpToolWithheld(input.member, connection.id, tool.name)) continue
     if (input.agent && !agentMayUseExternalTool(input.agent, connection, tool)) continue
     const summary = tool.description ?? tool.title ?? tool.name
     const score = scoreExternalTool(connection.name, tool, input.queryTokens)
@@ -1183,6 +1200,17 @@ async function prepareExternalCapability(input: {
   })
   if (!canUse) {
     return { ok: false, error: "forbidden", message: `You have not been granted access to "${connection.name}".` }
+  }
+
+  if (externalMcpToolWithheld(input.member, connection.id, input.toolName)) {
+    return {
+      ok: false,
+      error: "policy_blocked",
+      capability: buildExternalCapabilityName(connectionId, input.toolName),
+      message: `${input.toolName} ${AGENT_TOOL_WITHHELD_MESSAGE}`,
+      sameArgumentsRetryable: false,
+      retry: { action: "search_capabilities", searchRequired: true },
+    }
   }
 
   const policyDecision = evaluateToolPolicy(connection.toolPolicy, input.toolName)

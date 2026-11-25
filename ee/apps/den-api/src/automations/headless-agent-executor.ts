@@ -247,6 +247,7 @@ export async function executeHeadlessAgent(
       ttlMs,
       ...(modelAccessRequired ? { modelAccessRequired: true } : {}),
       ...(execution ? { execution } : {}),
+      ...(input.mcpScopes?.length ? { mcpScopes: input.mcpScopes } : {}),
     }).catch((error: unknown) => (isModelAccessRefusal(error) ? null : RUNNER_UNREACHABLE))
     const accessFailure = () => failure({ code: "provider_unavailable", message: "The cloud model is not available to the Automation owner. Check their model access and try again.", needsAttention: true })
 

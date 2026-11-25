@@ -150,11 +150,18 @@ function failure(error: unknown): { status: 400 | 403 | 404 | 409; body: { error
   if (error.message === "automation_cloud_worker_required") {
     return { status: 409, body: { error: error.message, message: "Set up OpenWork Cloud before creating a Cloud Automation." } }
   }
+  if (error.message === "personal_agent_routine_cloud_agent_only") {
+    return { status: 400, body: { error: error.message, message: "This Automation is a routine of a personal agent. It runs as an agent in OpenWork Cloud, where the agent's brief and tool limits apply." } }
+  }
+  if (error.message === "personal_agent_archived") {
+    return { status: 409, body: { error: error.message, message: "This routine's agent was archived, so the routine cannot run." } }
+  }
   if (["owner_membership_lost", "model_access_lost", "provider_unavailable"].includes(error.name)) {
     return { status: 409, body: { error: error.name, message: error.message } }
   }
   return null
 }
+export { failure as automationRouteFailure }
 
 const routeDescription = [
   "Den schedules Automations and keeps durable run history.",

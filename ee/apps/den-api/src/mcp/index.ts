@@ -9,6 +9,8 @@ import { publicRoute, tokenRoute } from "../middleware/index.js"
 import { jsonResponse } from "../openapi.js"
 import { getMcpResourceContext, verifyMcpRequest } from "./auth.js"
 import { buildMcpCatalog, getToolDescription, loadOpenApiDocument, type CatalogApp, type McpToolOperation } from "./catalog.js"
+import { filterPersonalAgents } from "./catalog-availability.js"
+import { organizationFeatureEnabled } from "../features.js"
 import { invokeMcpOperation } from "./invoke.js"
 import { preflightMcpJsonRpcRequest } from "./json-rpc-preflight.js"
 import { appLogger } from "../observability/logger.js"
@@ -85,7 +87,10 @@ export function registerMcpRoutes<T extends { Variables: RequestIdVariables & Re
       protocolVersionLogger.warn(message, fields)
     })
 
-    const catalog = await getCatalog(app as unknown as Hono, c.env)
+    const catalog = filterPersonalAgents(
+      await getCatalog(app as unknown as Hono, c.env),
+      await organizationFeatureEnabled(principal.organizationId, "personalAgents", { userId: principal.userId }),
+    )
     const server = new McpServer({
       name: "openwork-den-api",
       version: "1.0.0",

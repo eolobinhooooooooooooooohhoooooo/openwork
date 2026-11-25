@@ -20,6 +20,7 @@ import {
 import {
   buildExternalCapabilityName,
   executeExternalCapability,
+  externalMcpToolWithheld,
   EXTERNAL_MCP_SEARCH_CONCURRENCY,
   parseExternalCapabilityName,
   providerMarksReadOnly,
@@ -308,6 +309,10 @@ export async function buildExternalMcpToolTree(input: {
     member: memberIdentity,
   })
   const connections = connectionsRequiredBy(namespaceContext.codemodeExternalMcpConnections, input.required)
+  const toolAvailable = (connection: ExternalMcpConnectionRow, tool: { name: string }) => (
+    !isToolDisabled(connection.toolPolicy, tool.name)
+    && !externalMcpToolWithheld(memberIdentity, connection.id, tool.name)
+  )
   const deadline = createExternalMcpLifecycleDeadline(EXTERNAL_MCP_TOOL_LIFECYCLE_TIMEOUT_MS)
   const listed = (await mapConcurrent(connections, EXTERNAL_MCP_SEARCH_CONCURRENCY, async (connection) => {
     try {
@@ -330,7 +335,7 @@ export async function buildExternalMcpToolTree(input: {
   const namespaceEntries = listed.flatMap(({ connection, tools }) => {
     const namespace = namespaces.get(connection.id)
     if (!namespace) return []
-    const enabledTools = tools.filter((tool) => !isToolDisabled(connection.toolPolicy, tool.name))
+    const enabledTools = tools.filter((tool) => toolAvailable(connection, tool))
     const definitions = enabledTools.map((tool) => [tool.name, Tool.make({
       description: tool.description ?? tool.title ?? tool.name,
       input: tool.inputSchema,
@@ -355,7 +360,7 @@ export async function buildExternalMcpToolTree(input: {
       const namespace = namespaces.get(connection.id)
       if (!namespace) return []
       return tools
-        .filter((tool) => !isToolDisabled(connection.toolPolicy, tool.name))
+        .filter((tool) => toolAvailable(connection, tool))
         .map((tool) => ({
           scriptPath: codemodeScriptPath(namespace, tool.name),
           capabilityName: buildExternalCapabilityName(connection.id, tool.name),

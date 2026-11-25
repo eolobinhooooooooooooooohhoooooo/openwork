@@ -35,6 +35,7 @@ import {
   mcpMemberForToken,
   resolveMcpMemberIdentity,
 } from "./external-capabilities.js"
+import { toolsWithheld } from "./workbot-turn-limits.js"
 import { externalMcpToolSchemaDigest } from "./external-mcp-tool-arguments.js"
 import { InventoryEventBus, type InventoryRevision } from "./inventory-event-bus.js"
 import { preflightMcpJsonRpcRequest } from "./json-rpc-preflight.js"
@@ -205,6 +206,7 @@ export function createExternalConnectionProxyServer(input: {
     && input.directExposureEnabled === true
     && input.appHostClient !== true
   const downstreamUi = input.descriptor.capabilities.extensions?.[EXTENSION_ID]
+  const withheldTools = toolsWithheld(input.scopes)?.get(connection.id)
   const listProviderTools = async () => {
     if (!input.descriptor.capabilities.tools) return []
     return (await runtime.listTools(
@@ -215,6 +217,7 @@ export function createExternalConnectionProxyServer(input: {
     )).filter((tool) => (
       !PROXY_GATEWAY_TOOL_NAMES.has(tool.name)
       && !evaluateToolPolicy(connection.toolPolicy, tool.name).blocked
+      && !withheldTools?.has(tool.name)
     ))
   }
   const listDirectTools = async () => (await listProviderTools()).filter(toolVisibleToModel)

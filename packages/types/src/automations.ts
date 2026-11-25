@@ -249,6 +249,8 @@ export const automationSchema = z.object({
   latestSuccessfulRunId: idSchema.nullable().optional(),
   latestSuccessfulResult: z.unknown().optional(),
   needsAttentionReason: automationNeedsAttentionReasonSchema.nullable(),
+  /** Set when this Automation is a routine of one of the owner's personal agents. */
+  agentId: idSchema.nullable().optional(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
   archivedAt: nullableTimestampSchema,
@@ -275,6 +277,8 @@ export const automationRevisionSchema = z.object({
   action: automationActionSchema.optional(),
   executionTarget: z.enum(["desktop", "cloud"]).optional(),
   workspaceId: automationWorkspaceIdSchema.nullable().optional(),
+  /** The personal agent version a routine runs with: its brief and tool policy are fixed for every run of this revision. */
+  agentRevisionId: idSchema.nullable().optional(),
   maximumRuntimeMs: z.number().int().min(10_000).max(60 * 60 * 1_000),
   digest: z.string().trim().min(16).max(128),
   createdAt: timestampSchema,
