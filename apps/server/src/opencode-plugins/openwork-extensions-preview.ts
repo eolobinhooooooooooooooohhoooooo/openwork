@@ -1617,7 +1617,7 @@ function proposePersonalAgent(rawArgs: unknown): object {
     kind: "agent-proposal",
     proposal: personalAgentProposalSchema.parse(withNumberedWeekdays(rawArgs)),
     created: false,
-    limitation: "Nothing exists yet. The card asks the person \"Start like this?\"; the agent, its routine and its first run start only when they say yes. End your turn after the card; do not create the agent yourself.",
+    limitation: "Nothing exists yet. The card now on screen asks the person \"Start like this?\"; the agent, its routine and its first run start only when they say yes there. Do not describe the card or what happens next, and do not create the agent yourself.",
   };
 }
 

@@ -67,6 +67,10 @@ export const useAgentChatStore = create<AgentChatStore>()(persist((set) => ({
   partialize: (state) => ({ chats: state.chats }),
 }));
 
+export function isStandingChat(chat: AgentChat): boolean {
+  return chat.agentId !== null && (chat.routineId !== null || chat.proposalId === null);
+}
+
 export function agentChatFor(chats: Record<string, AgentChat>, organizationId: string | null, sessionId: string | null): AgentChat | null {
   if (!organizationId || !sessionId) return null;
   const chat = chats[sessionId];

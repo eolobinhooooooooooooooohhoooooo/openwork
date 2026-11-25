@@ -1,4 +1,4 @@
-import { agentChatFor, useAgentChatStore } from "./agent-chat-store";
+import { agentChatFor, isStandingChat, useAgentChatStore } from "./agent-chat-store";
 import { AgentRunResult } from "./agent-run-result";
 import { useAgentsRuntime, type AgentsRuntime } from "./agents-runtime";
 import { useAgentRoutinesQuery, useRoutineRunsQuery } from "./use-agents";
@@ -16,7 +16,7 @@ export function AgentTranscriptFooter(props: { sessionId: string }) {
   const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime?.organizationId ?? null, props.sessionId));
   const routinesByAgent = useAgentRoutinesQuery(runtime).data;
   const agentId = chat?.agentId;
-  if (!runtime || !chat || !agentId) return null;
+  if (!runtime || !chat || !agentId || !isStandingChat(chat)) return null;
   const routines = routinesByAgent?.get(agentId) ?? [];
   if (routines.length === 0) return null;
   return (

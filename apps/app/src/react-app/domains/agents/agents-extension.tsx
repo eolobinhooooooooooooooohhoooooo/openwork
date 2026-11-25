@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import type { SessionExtensions } from "@/react-app/kernel/session-extensions";
 import { t } from "@/i18n";
 
-import { agentChatFor, useAgentChatStore } from "./agent-chat-store";
+import { isStandingChat, useAgentChatStore } from "./agent-chat-store";
 import { AgentGreeting } from "./agent-greeting";
 import { AgentHeaderTitle } from "./agent-header";
 import { AgentPanel } from "./agent-panel";
@@ -11,38 +11,13 @@ import { AgentProposalCard } from "./agent-proposal-card";
 import { AgentSidebarSection } from "./agent-sidebar-section";
 import { AgentTranscriptFooter } from "./agent-transcript-footer";
 import { AgentTranscriptFrame } from "./agent-transcript-frame";
-import { useAgentsRuntime } from "./agents-runtime";
+import type { AgentsRuntime } from "./agents-runtime";
 import { useAgentListQuery } from "./use-agents";
 
-function useOwnsSession(sessionId: string | null): boolean {
-  const runtime = useAgentsRuntime();
-  return useAgentChatStore((state) => agentChatFor(state.chats, runtime?.organizationId ?? null, sessionId) !== null);
-}
+const NO_SESSION_IDS: ReadonlySet<string> = new Set();
+const NO_PLACEHOLDERS: ReadonlyMap<string, string> = new Map();
 
-function useComposerPlaceholder(sessionId: string | null): string | null {
-  const runtime = useAgentsRuntime();
-  return useAgentChatStore((state) => {
-    const chat = agentChatFor(state.chats, runtime?.organizationId ?? null, sessionId);
-    if (!chat) return null;
-    if (chat.agentId) return t("agents.placeholder_message", { name: chat.agentName ?? t("agents.new") });
-    return chat.asked ? t("agents.placeholder_answer") : t("agents.placeholder_new");
-  });
-}
-
-function useSidebarHiddenSessionIds(): ReadonlySet<string> {
-  const runtime = useAgentsRuntime();
-  const organizationId = runtime?.organizationId ?? null;
-  const chats = useAgentChatStore((state) => state.chats);
-  const agents = useAgentListQuery(runtime).data;
-  return useMemo(() => {
-    const listed = agents ? new Set(agents.filter((item) => item.agent.state === "active").map((item) => item.agent.id)) : null;
-    return new Set(Object.values(chats)
-      .filter((chat) => chat.organizationId === organizationId && (chat.agentId === null || listed === null || listed.has(chat.agentId)))
-      .map((chat) => chat.sessionId));
-  }, [agents, chats, organizationId]);
-}
-
-export const personalAgentSessionExtensions: SessionExtensions = {
+const COMPONENTS = {
   SidebarSection: AgentSidebarSection,
   HeaderTitle: AgentHeaderTitle,
   Greeting: AgentGreeting,
@@ -50,9 +25,31 @@ export const personalAgentSessionExtensions: SessionExtensions = {
   TranscriptFrame: AgentTranscriptFrame,
   TranscriptFooter: AgentTranscriptFooter,
   Panel: AgentPanel,
-  useOwnsSession,
-  useSidebarHiddenSessionIds,
-  useComposerPlaceholder,
 };
 
-
+export function usePersonalAgentSessionExtensions(runtime: AgentsRuntime | null): SessionExtensions {
+  const organizationId = runtime?.organizationId ?? null;
+  const chats = useAgentChatStore((state) => state.chats);
+  const agents = useAgentListQuery(runtime).data;
+  return useMemo(() => {
+    if (!organizationId) {
+      return { ...COMPONENTS, proposalCards: false, ownedSessionIds: NO_SESSION_IDS, hiddenSidebarSessionIds: NO_SESSION_IDS, composerPlaceholders: NO_PLACEHOLDERS };
+    }
+    const owned = Object.values(chats).filter((chat) => chat.organizationId === organizationId);
+    const listed = agents ? new Set(agents.filter((item) => item.agent.state === "active").map((item) => item.agent.id)) : null;
+    return {
+      ...COMPONENTS,
+      proposalCards: true,
+      ownedSessionIds: new Set(owned.map((chat) => chat.sessionId)),
+      hiddenSidebarSessionIds: new Set(owned
+        .filter((chat) => chat.agentId === null || listed === null || listed.has(chat.agentId))
+        .map((chat) => chat.sessionId)),
+      composerPlaceholders: new Map(owned.map((chat) => [
+        chat.sessionId,
+        isStandingChat(chat)
+          ? t("agents.placeholder_message", { name: chat.agentName ?? t("agents.new") })
+          : chat.asked ? t("agents.placeholder_answer") : t("agents.placeholder_new"),
+      ])),
+    };
+  }, [agents, chats, organizationId]);
+}

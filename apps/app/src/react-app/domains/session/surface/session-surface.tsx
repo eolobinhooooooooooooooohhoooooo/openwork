@@ -176,7 +176,7 @@ import { MessageList } from "@/components/chat/message-list";
 import { MessageListProvider, type DispatchAction } from "@/components/chat/message-list-provider";
 import { NoCreatedSkillSharing, type CreatedSkillSharingProviderProps } from "@/react-app/kernel/created-skill-sharing";
 import { useSessionExtensions } from "@/react-app/kernel/session-extensions";
-import { automationProposalsInParts, isPersonalAgentProposalToolPart } from "@/components/tools/openwork-automation-proposal";
+import { personalAgentProposalsInParts } from "@/components/tools/openwork-automation-proposal";
 import type { ComponentType } from "react";
 import type {
   ChatToolReconnectAction,
@@ -1123,7 +1123,7 @@ function uncopiedChatReason(error: unknown): string | undefined {
 export function SessionSurface(props: SessionSurfaceProps) {
   const SkillSharingProvider = props.skillSharingProvider ?? NoCreatedSkillSharing;
   const extensions = useSessionExtensions();
-  const extensionOwnsSession = extensions.useOwnsSession(props.sessionId);
+  const extensionOwnsSession = extensions.ownedSessionIds.has(props.sessionId);
   const local = useLocal();
   const { config: shellConfig } = useShellConfig();
   const showThinking = local.prefs.showThinking;
@@ -3337,7 +3337,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
 
   const latestAgentProposalId = useMemo(() => {
     if (!extensionOwnsSession) return null;
-    return visibleMessages.flatMap((message) => message.role === "assistant" ? automationProposalsInParts(message.parts).filter(isPersonalAgentProposalToolPart) : [])
+    return visibleMessages.flatMap((message) => message.role === "assistant" ? personalAgentProposalsInParts(message.parts) : [])
       .at(-1)?.toolCallId ?? null;
   }, [extensionOwnsSession, visibleMessages]);
   const AgentProposalCard = extensions.ProposalCard;
@@ -3347,9 +3347,10 @@ export function SessionSurface(props: SessionSurfaceProps) {
       workspaceId={props.workspaceId}
       part={part}
       latest={latestAgentProposalId === null || latestAgentProposalId === part.toolCallId}
+      readOnly={archived || !archiveStateKnown || archiveHeld}
       setPrompt={handleMessageListSetPrompt}
     />
-  ), [AgentProposalCard, handleMessageListSetPrompt, latestAgentProposalId, props.sessionId, props.workspaceId]);
+  ), [AgentProposalCard, archived, archiveStateKnown, archiveHeld, handleMessageListSetPrompt, latestAgentProposalId, props.sessionId, props.workspaceId]);
 
   const resumeGuardRef = useRef(createSingleFlight());
   const [resuming, setResuming] = useState(false);
@@ -3843,7 +3844,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
                       highlightQuery={findHighlightQuery}
                       developerMode={props.developerMode}
                       displaySuggestions={!archived && !extensionOwnsSession && shellConfig.starterCards && snapshot !== null && snapshot.messages.length === 0}
-                      renderAgentProposal={renderAgentProposal}
+                      renderAgentProposal={extensions.proposalCards ? renderAgentProposal : undefined}
                       providerConnectedCount={props.providerConnectedCount ?? 0}
                       connectorIdentities={connectorIdentities}
                       syncDegraded={runSyncHealth.degraded}
@@ -3889,7 +3890,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
                   </EnvironmentVariableProvider>
                 </OpenTargetProvider>
               </DevProfiler>
-              {renderedMessages.length > 0 ? <extensions.TranscriptFooter sessionId={props.sessionId} /> : null}
+              <extensions.TranscriptFooter sessionId={props.sessionId} />
               </extensions.TranscriptFrame>
             )}
             </SessionHistoryBoundary>

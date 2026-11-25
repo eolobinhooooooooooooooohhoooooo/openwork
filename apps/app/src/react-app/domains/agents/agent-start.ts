@@ -21,6 +21,16 @@ export type AgentStartProgress = {
   firstRunId: string | null;
 };
 
+const starting = new Map<string, Promise<AgentStartProgress>>();
+
+export function startOnce(key: string, start: () => Promise<AgentStartProgress>): Promise<AgentStartProgress> {
+  const running = starting.get(key);
+  if (running) return running;
+  const started = start().finally(() => starting.delete(key));
+  starting.set(key, started);
+  return started;
+}
+
 export async function startAgentFromProposal(input: {
   api: AgentStartApi;
   proposal: PersonalAgentProposal;

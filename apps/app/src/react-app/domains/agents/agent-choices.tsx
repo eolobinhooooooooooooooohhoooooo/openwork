@@ -22,7 +22,7 @@ export function AgentChoices(props: { title?: string; choices: AgentChoice[]; de
             disabled={choice.disabled}
             onClick={choice.onSelect}
             className={cn(
-              "group/choice -mx-2 flex items-center gap-3 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-dls-hover focus-visible:bg-dls-hover focus-visible:outline-none disabled:pointer-events-none disabled:opacity-60",
+              "group/choice -mx-2 flex items-center gap-3 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-dls-hover focus-visible:bg-dls-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60",
               choice.muted ? "text-dls-secondary" : "text-dls-text",
             )}
           >

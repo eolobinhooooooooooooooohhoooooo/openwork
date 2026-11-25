@@ -119,7 +119,7 @@ import { AutomationsPage } from "@/react-app/domains/automations/automations-pag
 import { useAutomationsDenContext } from "@/react-app/domains/automations/use-automations";
 import { useOrgFeature } from "@/react-app/domains/cloud/use-org-feature";
 import { agentPromptNoteParts } from "@/react-app/domains/agents/agent-prompt-note";
-import { personalAgentSessionExtensions } from "@/react-app/domains/agents/agents-extension";
+import { usePersonalAgentSessionExtensions } from "@/react-app/domains/agents/agents-extension";
 import { PersonalAgentsProvider, type AgentsRuntime } from "@/react-app/domains/agents/agents-runtime";
 import { SessionExtensionsProvider } from "@/react-app/kernel/session-extensions";
 import { automationProviderCatalog } from "@/react-app/domains/automations/automation-model-options";
@@ -413,6 +413,14 @@ function focusedWorkbenchPaneOwner() {
   return focused
     ? JSON.stringify([workbench.focusedPane, focused.workspaceId, focused.sessionId])
     : null;
+}
+
+function personalAgentsOrganizationIdNow(): string | null {
+  const settings = readDenSettings();
+  const organizationId = settings.activeOrgId?.trim() || null;
+  if (!organizationId || !settings.authToken?.trim()) return null;
+  const features = getReactQueryClient().getQueryData<Record<string, boolean>>(["den", "org-features", organizationId]);
+  return features?.personalAgents === true ? organizationId : null;
 }
 
 export function SessionRoute() {
@@ -1793,7 +1801,7 @@ export function SessionRoute() {
                   }
 
                   const parts = await draftToParts(draft, selectedWorkspaceRoot, targetSessionId, selectedWorkspaceEndpoint);
-                  if (personalAgentsEnabled) parts.push(...agentPromptNoteParts(targetSessionId));
+                  parts.push(...agentPromptNoteParts(targetSessionId, personalAgentsOrganizationIdNow()));
                   assertCurrent();
                   const system = await buildOpenworkSessionSystemContext(client, {
                     workspaceId: selectedWorkspaceId,
@@ -2167,7 +2175,7 @@ export function SessionRoute() {
                     return;
                   }
                   const parts = await draftToParts(draft, workspaceRoot, targetSessionId, endpoint);
-                  if (personalAgentsEnabled) parts.push(...agentPromptNoteParts(targetSessionId));
+                  parts.push(...agentPromptNoteParts(targetSessionId, personalAgentsOrganizationIdNow()));
                   assertCurrent();
                   const system = await buildOpenworkSessionSystemContext(endpoint.client, {
                     workspaceId: workspace.id,
@@ -2743,8 +2751,19 @@ export function SessionRoute() {
       createSession: (workspaceId) => handleCreateTaskInWorkspaceWithOpenMode(workspaceId, "primary"),
       openSession: (workspaceId, sessionId) => navigateToWorkspaceSession(workspaceId, sessionId),
       renameSession: (workspaceId, sessionId, title) => void renameSessionTitle(sessionId, title, workspaceId).catch(() => undefined),
+      sessionState: async (workspaceId, sessionId) => {
+        if (workspaceId !== selectedWorkspaceId || !opencodeClient) return "unknown";
+        try {
+          const found = await opencodeClient.session.get({ sessionID: sessionId });
+          if (found.data) return found.data.time.archived ? "gone" : "open";
+          return found.response?.status === 404 ? "gone" : "unknown";
+        } catch {
+          return "unknown";
+        }
+      },
     };
-  }, [agentsDen.client, agentsDen.organizationId, agentsDen.ready, handleCreateTaskInWorkspaceWithOpenMode, navigateToWorkspaceSession, personalAgentsEnabled, renameSessionTitle, selectedSessionId, selectedWorkspaceId]);
+  }, [agentsDen.client, agentsDen.organizationId, agentsDen.ready, handleCreateTaskInWorkspaceWithOpenMode, navigateToWorkspaceSession, opencodeClient, personalAgentsEnabled, renameSessionTitle, selectedSessionId, selectedWorkspaceId]);
+  const sessionExtensions = usePersonalAgentSessionExtensions(agentsRuntime);
 
   const createNewSessionInSelectedWorkspace = useCallback(() => {
     if (selectedWorkspaceId) handleCreateTaskInWorkspace(selectedWorkspaceId);
@@ -3825,7 +3844,7 @@ export function SessionRoute() {
       />
     ) : null}
     <PersonalAgentsProvider value={agentsRuntime}>
-    <SessionExtensionsProvider value={personalAgentSessionExtensions}>
+    <SessionExtensionsProvider value={sessionExtensions}>
     <SessionPage
       ref={composerImpressionRef}
       currentSessionArchive={currentSessionArchive}

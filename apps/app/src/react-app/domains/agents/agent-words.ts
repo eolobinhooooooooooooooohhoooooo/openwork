@@ -49,6 +49,13 @@ export function scheduleInWords(schedule: AutomationSchedule): string {
   return t("agents.schedule_meetings");
 }
 
+export function scheduleZone(schedule: AutomationSchedule): string | null {
+  if (schedule.timezone === new Intl.DateTimeFormat().resolvedOptions().timeZone) return null;
+  const zone = new Intl.DateTimeFormat(undefined, { timeZone: schedule.timezone, timeZoneName: "shortGeneric" })
+    .formatToParts(new Date()).find((part) => part.type === "timeZoneName")?.value;
+  return zone ?? schedule.timezone;
+}
+
 export function timeOfDay(timestamp: number): string {
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(timestamp));
 }

@@ -6,6 +6,7 @@ export type SessionProposalCardProps = {
   workspaceId: string;
   part: DynamicToolUIPart;
   latest: boolean;
+  readOnly: boolean;
   setPrompt: (text: string) => void;
 };
 
@@ -22,12 +23,14 @@ export type SessionExtensions = {
   TranscriptFrame: ComponentType<{ sessionId: string; children: ReactNode }>;
   TranscriptFooter: ComponentType<{ sessionId: string }>;
   Panel: ComponentType<{ sessionId: string | null }>;
-  useOwnsSession: (sessionId: string | null) => boolean;
-  useSidebarHiddenSessionIds: () => ReadonlySet<string>;
-  useComposerPlaceholder: (sessionId: string | null) => string | null;
+  proposalCards: boolean;
+  ownedSessionIds: ReadonlySet<string>;
+  hiddenSidebarSessionIds: ReadonlySet<string>;
+  composerPlaceholders: ReadonlyMap<string, string>;
 };
 
 const NO_SESSION_IDS: ReadonlySet<string> = new Set();
+const NO_PLACEHOLDERS: ReadonlyMap<string, string> = new Map();
 
 function Nothing() {
   return null;
@@ -45,9 +48,10 @@ const NO_SESSION_EXTENSIONS: SessionExtensions = {
   TranscriptFrame: Passthrough,
   TranscriptFooter: Nothing,
   Panel: Nothing,
-  useOwnsSession: () => false,
-  useSidebarHiddenSessionIds: () => NO_SESSION_IDS,
-  useComposerPlaceholder: () => null,
+  proposalCards: false,
+  ownedSessionIds: NO_SESSION_IDS,
+  hiddenSidebarSessionIds: NO_SESSION_IDS,
+  composerPlaceholders: NO_PLACEHOLDERS,
 };
 
 const SessionExtensionsContext = createContext<SessionExtensions>(NO_SESSION_EXTENSIONS);

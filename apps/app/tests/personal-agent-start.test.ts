@@ -2,8 +2,8 @@ import { expect, test } from "bun:test"
 import type { DynamicToolUIPart } from "ai"
 import type { PersonalAgentProposal } from "@openwork/types/den/personal-agents"
 
-import { automationProposalsInParts, isAutomationProposalToolPart, isPersonalAgentProposalToolPart, parsePersonalAgentProposal } from "../src/components/tools/openwork-automation-proposal"
-import { startAgentFromProposal, type AgentStartApi, type AgentStartProgress } from "../src/react-app/domains/agents/agent-start"
+import { automationProposalsInParts, isAutomationProposalToolPart, isPersonalAgentProposalToolPart, parsePersonalAgentProposal, personalAgentProposalsInParts } from "../src/components/tools/openwork-automation-proposal"
+import { startAgentFromProposal, startOnce, type AgentStartApi, type AgentStartProgress } from "../src/react-app/domains/agents/agent-start"
 import { routinesByAgent } from "../src/react-app/domains/agents/use-agents"
 import { scheduleInWords } from "../src/react-app/domains/agents/agent-words"
 
@@ -69,6 +69,18 @@ test("a first run that fails to start is retried without a second agent or routi
   expect(progress.firstRunId).toBe("atr_1")
 })
 
+test("two confirmations of the same chat at once start one agent", async () => {
+  const { api, calls } = fakeApi()
+  let kept = nothing
+  const save = (next: Partial<AgentStartProgress>) => { kept = { ...kept, ...next } }
+  const confirm = () => startOnce("ses_1", () => startAgentFromProposal({ api, proposal, saved: kept, save }))
+  const [first, second] = await Promise.all([confirm(), confirm()])
+  expect(calls).toEqual(["agent:Bug watcher", "routine:pag_1:Check #bugs", "run:pag_1:aut_1"])
+  expect(second).toEqual(first)
+  await confirm()
+  expect(calls).toHaveLength(3)
+})
+
 test("an agent that already started is not started again", async () => {
   const { api, calls } = fakeApi()
   await startAgentFromProposal({
@@ -85,7 +97,8 @@ test("an agent proposal is found in a chat step and is not an Automation proposa
   const part: DynamicToolUIPart = { type: "dynamic-tool", toolName: "openwork_execute", toolCallId: "call_1", state: "output-available", input: {}, output }
   expect(isPersonalAgentProposalToolPart(part)).toBe(true)
   expect(isAutomationProposalToolPart(part)).toBe(false)
-  expect(automationProposalsInParts([part]).map((found) => found.toolCallId)).toEqual(["call_1"])
+  expect(personalAgentProposalsInParts([part]).map((found) => found.toolCallId)).toEqual(["call_1"])
+  expect(automationProposalsInParts([part])).toEqual([])
   expect(parsePersonalAgentProposal(output)?.routine.name).toBe("Check #bugs")
   expect(parsePersonalAgentProposal(JSON.stringify({ ok: true, id: "agent.propose", result: { proposal: { name: "No routine" } } }))).toBeNull()
   expect(parsePersonalAgentProposal(JSON.stringify({ ok: true, id: "automation.propose", result: { proposal } }))).toBeNull()

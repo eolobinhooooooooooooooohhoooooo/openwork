@@ -31,7 +31,11 @@ export function AgentSidebarSection() {
     mutationFn: async (row: AgentRow | null) => {
       if (!runtime) return;
       const chat = row ? row.chat : unusedDraft(useAgentChatStore.getState().chats, runtime.organizationId, runtime.workspaceId);
-      if (chat) return runtime.openSession(chat.workspaceId, chat.sessionId);
+      if (chat) {
+        if (await runtime.sessionState(chat.workspaceId, chat.sessionId) !== "gone") return runtime.openSession(chat.workspaceId, chat.sessionId);
+        useAgentChatStore.getState().forget(chat.sessionId);
+        if (row && !row.agentId) return;
+      }
       const sessionId = await runtime.createSession(runtime.workspaceId);
       if (!sessionId) throw new Error(t("agents.open_failed"));
       useAgentChatStore.getState().open({

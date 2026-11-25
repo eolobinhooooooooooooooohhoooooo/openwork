@@ -9,6 +9,7 @@ export type AgentsRuntime = {
   selectedSessionId: string | null;
   createSession: (workspaceId: string) => Promise<string | null>;
   openSession: (workspaceId: string, sessionId: string) => void;
+  sessionState: (workspaceId: string, sessionId: string) => Promise<"open" | "gone" | "unknown">;
   renameSession: (workspaceId: string, sessionId: string, title: string) => void;
 };
 

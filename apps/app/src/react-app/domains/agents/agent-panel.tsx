@@ -7,6 +7,7 @@ import { t } from "@/i18n";
 
 import { agentChatFor, useAgentChatStore } from "./agent-chat-store";
 import { AgentFace } from "./agent-face";
+import { AGENT_PANEL_ID } from "./agent-header";
 import { scheduleInWords, whenInWords } from "./agent-words";
 import { useAgentsRuntime } from "./agents-runtime";
 import { useAgentActions, useAgentRoutinesQuery } from "./use-agents";
@@ -27,7 +28,7 @@ export function AgentPanel(props: { sessionId: string | null }) {
   const firstRoutine = routines[0];
 
   return (
-    <aside data-agent-panel={agentId} aria-label={name} className="hidden w-[300px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-dls-border bg-dls-surface px-4 pb-4 pt-2 lg:flex">
+    <aside id={AGENT_PANEL_ID} data-agent-panel={agentId} aria-label={name} className="hidden w-[300px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-dls-border bg-dls-surface px-4 pb-4 pt-2 lg:flex">
       <div className="flex h-8 items-center justify-end">
         <Button type="button" variant="ghost" size="icon-sm" aria-label={t("agents.panel_close")} onClick={() => useAgentChatStore.getState().setPanel(null)}>
           <X className="size-4" />

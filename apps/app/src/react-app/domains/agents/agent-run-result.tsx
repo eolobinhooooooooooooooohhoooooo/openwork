@@ -12,7 +12,11 @@ function resultText(run: AutomationRun, routineName: string): string {
 }
 
 export function AgentRunResult(props: { runtime: AgentsRuntime; runId: string; routineName: string }) {
-  const receipt = useAgentRunQuery(props.runtime, props.runId).data;
+  const query = useAgentRunQuery(props.runtime, props.runId);
+  const receipt = query.data;
+  if (query.isError && !receipt) {
+    return <p data-agent-run={props.runId} data-agent-run-state="unavailable" data-agent-line className="text-[13px] leading-relaxed text-dls-secondary">{t("agents.run_unavailable", { name: props.routineName })}</p>;
+  }
   if (!receipt || isActiveRun(receipt.run)) {
     return (
       <p data-agent-run={props.runId} data-agent-run-state="working" data-agent-line className="animate-pulse text-[13px] leading-relaxed text-dls-secondary">

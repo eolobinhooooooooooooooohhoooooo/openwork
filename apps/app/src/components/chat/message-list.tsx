@@ -56,6 +56,8 @@ import {
   automationProposalsInParts,
   isAutomationProposalToolPart,
   isPersonalAgentProposalToolPart,
+  personalAgentProposalCalls,
+  personalAgentProposalsInParts,
   OpenWorkAutomationProposalTool,
 } from "@/components/tools/openwork-automation-proposal"
 import { QuestionTool, questionToolAnswers } from "@/components/tools/question"
@@ -251,7 +253,7 @@ function isReservedConnectionQuestionPart(part: ToolUIPart | DynamicToolUIPart):
 }
 
 const ToolMessageInner = ({ part }: ToolMessageProps) => {
-  const { connectorIdentities, onMcpReconnect, onMcpReopenAuthorization, connectionQuestionToolCallId, getConnectionDecision } = useMessageList()
+  const { connectorIdentities, onMcpReconnect, onMcpReopenAuthorization, connectionQuestionToolCallId, getConnectionDecision, renderAgentProposal } = useMessageList()
   const pinnedRemoteThreads = React.useContext(PinnedRemoteThreadsContext)
   const pinnedQuestions = React.useContext(PinnedQuestionsContext)
   const pinnedProposals = React.useContext(PinnedAutomationProposalsContext)
@@ -272,7 +274,9 @@ const ToolMessageInner = ({ part }: ToolMessageProps) => {
     return start ? [{ start, call }] : []
   }) : []
   const foldTool = appPanelFold && lifecycle !== "waiting" && !connectionCardParts.has(part.toolCallId) && !promptCall && !isTaskToolPart(part)
-  const proposalCalls = calls && part.type === "dynamic-tool" ? automationProposalCalls(part) : []
+  const proposalCalls = calls && part.type === "dynamic-tool"
+    ? [...automationProposalCalls(part), ...(renderAgentProposal ? personalAgentProposalCalls(part) : [])]
+    : []
   const proposals = proposalCalls.filter((call) => !pinnedProposals.has(call.toolCallId))
   if (foldTool && !remoteStart && remoteStarts.length === 0 && proposals.length === 0) return null
 
@@ -372,7 +376,7 @@ const ToolMessageInner = ({ part }: ToolMessageProps) => {
     return pinnedQuestions.has(part.toolCallId) ? null : <QuestionTool part={part} />
   }
 
-  if (part.type === "dynamic-tool" && (isAutomationProposalToolPart(part) || isPersonalAgentProposalToolPart(part))) {
+  if (part.type === "dynamic-tool" && (isAutomationProposalToolPart(part) || (renderAgentProposal && isPersonalAgentProposalToolPart(part)))) {
     return pinnedProposals.has(part.toolCallId) ? null : <ProposalCard part={part} />
   }
 
@@ -1396,11 +1400,12 @@ function collectAnsweredQuestions(items: UIMessageWithIndex[]) {
     isToolUIPart(part) && isQuestionToolPart(part) && !isReservedConnectionQuestionPart(part) && questionToolAnswers(part) ? [part] : []))
 }
 
-function collectAutomationProposals(items: UIMessageWithIndex[]): DynamicToolUIPart[] {
+function collectAutomationProposals(items: UIMessageWithIndex[], withAgentProposals: boolean): DynamicToolUIPart[] {
   const proposals = new Map<string, DynamicToolUIPart>()
   for (const { message } of items) {
     if (message.role !== "assistant" || isSessionErrorMessage(message)) continue
     for (const part of automationProposalsInParts(message.parts)) proposals.set(part.toolCallId, part)
+    if (withAgentProposals) for (const part of personalAgentProposalsInParts(message.parts)) proposals.set(part.toolCallId, part)
   }
   return [...proposals.values()]
 }
@@ -1435,7 +1440,7 @@ function MessageGroup({
   isStreaming,
   newestAppCallIds,
 }: AssistantMessageGroupProps) {
-  const { onForkAtMessage, forkingMessageId, showThinking, readOnly, getConnectionDecision, resolveReplyModelTitle, autoRoutes, resolveAutoRouteName, sessionId } = useMessageList()
+  const { onForkAtMessage, forkingMessageId, showThinking, readOnly, getConnectionDecision, resolveReplyModelTitle, autoRoutes, resolveAutoRouteName, sessionId, renderAgentProposal } = useMessageList()
   const connectionCardParts = React.useMemo(() => connectionCardPartIds(items, getConnectionDecision), [items, getConnectionDecision])
   const newestAppCalls = React.useMemo(() => new Set(newestAppCallIds.split("\n")), [newestAppCallIds])
   const lastItem = items[items.length - 1]
@@ -1550,7 +1555,7 @@ function MessageGroup({
   const pinnedRemoteIds = pinnedRemoteThreads.length > 0 ? new Set(pinnedRemoteThreads.map(({ part }) => part.toolCallId)) : NO_PINNED_REMOTE_THREADS
   const answeredQuestions = collapseSteps ? collectAnsweredQuestions(stepItems) : []
   const answeredQuestionIds = answeredQuestions.length > 0 ? new Set(answeredQuestions.map((part) => part.toolCallId)) : NO_PINNED_QUESTIONS
-  const pinnedProposals = collectAutomationProposals(items)
+  const pinnedProposals = collectAutomationProposals(items, Boolean(renderAgentProposal))
   const pinnedProposalIds = pinnedProposals.length > 0 ? new Set(pinnedProposals.map((part) => part.toolCallId)) : NO_PINNED_PROPOSALS
   const replyStartedAt = stepsStartedAt ?? (lastRealItem ? getMessageCreated(lastRealItem.message) : null)
   const stepCountLabel = stepRowCount ? `${stepRowCount} ${stepRowCount === 1 ? "step" : "steps"}` : null

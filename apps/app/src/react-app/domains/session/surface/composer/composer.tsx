@@ -260,7 +260,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     mcps: false,
   });
   const [commandsLoaded, setCommandsLoaded] = useState(false);
-  const extensionPlaceholder = useSessionExtensions().useComposerPlaceholder(props.sessionId ?? null);
+  const extensionPlaceholder = useSessionExtensions().composerPlaceholders.get(props.sessionId ?? "");
   const [skillsLoaded, setSkillsLoaded] = useState(Boolean(props.skills?.length));
   const [pluginsLoaded, setPluginsLoaded] = useState(Boolean(props.importedPlugins?.length));
   const [mcpLoaded, setMcpLoaded] = useState(Boolean(props.mcpServers?.length));

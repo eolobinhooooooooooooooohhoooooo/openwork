@@ -87,9 +87,6 @@ export function isPersonalAgentProposalToolPart(part: DynamicToolUIPart): boolea
     && parsePersonalAgentProposal(part.output) !== null
 }
 
-function isProposalToolPart(part: DynamicToolUIPart): boolean {
-  return isAutomationProposalToolPart(part) || isPersonalAgentProposalToolPart(part)
-}
 
 export function isAutomationProposalToolPart(part: DynamicToolUIPart): boolean {
   return part.toolName === "openwork_execute"
@@ -98,13 +95,25 @@ export function isAutomationProposalToolPart(part: DynamicToolUIPart): boolean {
 }
 
 export function automationProposalCalls(part: DynamicToolUIPart): DynamicToolUIPart[] {
-  return (codeModeToolCalls(part) ?? []).filter(isProposalToolPart)
+  return (codeModeToolCalls(part) ?? []).filter(isAutomationProposalToolPart)
+}
+
+export function personalAgentProposalCalls(part: DynamicToolUIPart): DynamicToolUIPart[] {
+  return (codeModeToolCalls(part) ?? []).filter(isPersonalAgentProposalToolPart)
+}
+
+export function personalAgentProposalsInParts(parts: UIMessage["parts"]): DynamicToolUIPart[] {
+  return parts.flatMap((part) => {
+    if (part.type !== "dynamic-tool") return []
+    if (isPersonalAgentProposalToolPart(part)) return [part]
+    return personalAgentProposalCalls(part)
+  })
 }
 
 export function automationProposalsInParts(parts: UIMessage["parts"]): DynamicToolUIPart[] {
   return parts.flatMap((part) => {
     if (part.type !== "dynamic-tool") return []
-    if (isProposalToolPart(part)) return [part]
+    if (isAutomationProposalToolPart(part)) return [part]
     return automationProposalCalls(part)
   })
 }

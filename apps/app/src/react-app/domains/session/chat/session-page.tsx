@@ -460,7 +460,7 @@ function controlStringArg(args: unknown, key: string) {
 
 export function SessionPage(props: SessionPageProps) {
   const extensions = useSessionExtensions();
-  const hiddenSidebarSessionIds = extensions.useSidebarHiddenSessionIds();
+  const hiddenSidebarSessionIds = extensions.hiddenSidebarSessionIds;
   const sidebarSessionGroups = useMemo(() => hiddenSidebarSessionIds.size === 0
     ? props.sidebar.workspaceSessionGroups
     : props.sidebar.workspaceSessionGroups.map((group) => ({ ...group, sessions: group.sessions.filter((session) => !hiddenSidebarSessionIds.has(session.id)) })),
