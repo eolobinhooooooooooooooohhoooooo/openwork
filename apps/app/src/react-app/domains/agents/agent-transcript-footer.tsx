@@ -4,14 +4,14 @@ import { t } from "@/i18n";
 
 import { AgentAskCard } from "./agent-ask-card";
 import { AgentChangeRequest } from "./agent-change-request";
-import { agentChatFor, isStandingChat, useAgentChatStore } from "./agent-chat-store";
+import { agentChatFor, agentChatKey, isStandingChat, useAgentChatStore } from "./agent-chat-store";
 import { AgentRunResult } from "./agent-run-result";
 import { useAgentsRuntime } from "./agents-runtime";
 import { isActiveRun, useAgentActions, useAgentDetail, useAgentRequestsQuery, useAgentRunsQuery } from "./use-agents";
 
 export function AgentTranscriptFooter(props: { sessionId: string }) {
   const runtime = useAgentsRuntime();
-  const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime?.organizationId ?? null, props.sessionId));
+  const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime, props.sessionId));
   const agent = useAgentDetail(runtime, chat?.agentId);
   const agentId = chat && isStandingChat(chat) && agent ? agent.agent.id : null;
   const active = agent?.routines.some((routine) => isActiveRun(routine.latestRun)) ?? false;
@@ -33,12 +33,13 @@ export function AgentTranscriptFooter(props: { sessionId: string }) {
       ))}
       {runsQuery.isError && <p className="text-xs text-dls-secondary">{t("agents.runs_unavailable")}</p>}
       {requests.map((request) => request.kind === "tool" ? (
-        <AgentAskCard key={request.id} runtime={runtime} agent={agent} request={request} onAllowed={() => {
+        <AgentAskCard key={agentChatKey(runtime, request.id)} runtime={runtime} agent={agent} request={request} onAllowed={() => {
+          if (!request.requestedByCaller) return;
           const previousRun = runs.find((run) => run.id === request.runId);
           const routineId = previousRun?.automationId ?? (request.runId && request.runId === chat.firstRunId ? chat.routineId : null) ?? routines[0]?.id;
           actions.runNow.mutate({ agentId, routineId }, { onError: () => toast.error(t("agents.panel_run_failed")) });
         }} />
-      ) : <AgentChangeRequest key={request.id} runtime={runtime} agent={agent} request={request} />)}
+      ) : <AgentChangeRequest key={agentChatKey(runtime, request.id)} runtime={runtime} agent={agent} request={request} />)}
       {requestsQuery.isError && <p className="text-xs text-dls-secondary">{t("agents.requests_unavailable")}</p>}
     </div>
   );

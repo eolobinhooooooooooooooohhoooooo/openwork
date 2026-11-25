@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { t } from "@/i18n";
 
-import { agentChatFor, useAgentChatStore } from "./agent-chat-store";
+import { agentChatFor, agentChatKey, useAgentChatStore } from "./agent-chat-store";
 import { AgentFace } from "./agent-face";
 import { AGENT_PANEL_ID } from "./agent-header";
 import { AgentSettings } from "./agent-settings";
@@ -18,11 +18,12 @@ import { useAgentActions, useAgentDetail } from "./use-agents";
 
 export function AgentPanel(props: { sessionId: string | null }) {
   const runtime = useAgentsRuntime();
-  const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime?.organizationId ?? null, props.sessionId));
-  const open = useAgentChatStore((state) => state.panelSessionId !== null && state.panelSessionId === props.sessionId);
+  const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime, props.sessionId));
+  const panelKey = chat ? agentChatKey(chat, chat.sessionId) : null;
+  const open = useAgentChatStore((state) => panelKey !== null && state.panelChatKey === panelKey);
   const agent = useAgentDetail(runtime, chat?.agentId);
   if (!runtime || !chat || !agent || !open) return null;
-  return <AgentPanelBody key={chat.sessionId} runtime={runtime} agent={agent} />;
+  return <AgentPanelBody key={panelKey} runtime={runtime} agent={agent} />;
 }
 
 function AgentPanelBody({ runtime, agent }: { runtime: AgentsRuntime; agent: PersonalAgentDetail }) {

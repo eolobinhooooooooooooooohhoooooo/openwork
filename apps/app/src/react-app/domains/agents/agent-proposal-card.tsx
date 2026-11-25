@@ -5,48 +5,51 @@ import { parsePersonalAgentProposal } from "@/components/tools/openwork-automati
 import type { SessionProposalCardProps } from "@/react-app/kernel/session-extensions";
 import { t } from "@/i18n";
 
-import { isStandingChat, useAgentChatStore } from "./agent-chat-store";
+import { agentChatFor, agentChatKey, isStandingChat, useAgentChatStore } from "./agent-chat-store";
 import { AgentChoices } from "./agent-choices";
 import { AgentFace } from "./agent-face";
 import { AgentRunResult } from "./agent-run-result";
 import { agentProposalKey, startAgentFromProposal, startOnce } from "./agent-start";
 import { scheduleInWords, scheduleZone } from "./agent-words";
 import { useAgentsRuntime } from "./agents-runtime";
-import { agentListKey } from "./use-agents";
+import { agentListKey, agentsQueryRoot } from "./use-agents";
 
 export function AgentProposalCard(props: SessionProposalCardProps) {
   const runtime = useAgentsRuntime();
   const queryClient = useQueryClient();
-  const chat = useAgentChatStore((state) => state.chats[props.sessionId]);
+  const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime, props.sessionId));
   const proposal = parsePersonalAgentProposal(props.part.output);
   const start = useMutation({
-    mutationFn: () => startOnce(props.sessionId, async () => {
+    mutationKey: [...agentsQueryRoot(runtime), "start", props.sessionId, props.part.toolCallId],
+    mutationFn: async () => {
       if (!runtime || !proposal) throw new Error(t("agents.start_sign_in"));
-      const store = useAgentChatStore.getState();
-      store.open({ organizationId: runtime.organizationId, workspaceId: props.workspaceId, sessionId: props.sessionId, proposalId: props.part.toolCallId });
-      const saved = useAgentChatStore.getState().chats[props.sessionId];
-      const progress = await startAgentFromProposal({
-        api: {
-          createAgent: (input) => runtime.client.createPersonalAgent(runtime.organizationId, input),
-          createRoutine: (agentId, input) => runtime.client.createPersonalAgentRoutine(runtime.organizationId, agentId, input),
-          runNow: (agentId, routineId) => runtime.client.runPersonalAgentNow(runtime.organizationId, agentId, { routineId }),
-        },
-        proposal,
-        idempotencyKey: await agentProposalKey(props.sessionId, props.part.toolCallId),
-        linkChat: (agentId) => runtime.client.setPersonalAgentChat(runtime.organizationId, agentId, { workspaceId: props.workspaceId, sessionId: props.sessionId }),
-        saved: {
-          agentId: saved?.agentId ?? null,
-          agentName: saved?.agentName ?? null,
-          routineId: saved?.routineId ?? null,
-          routineName: saved?.routineName ?? null,
-          firstRunId: saved?.firstRunId ?? null,
-        },
-        save: (next) => useAgentChatStore.getState().save(props.sessionId, next),
+      return startOnce(agentChatKey(runtime, props.sessionId), async () => {
+        const store = useAgentChatStore.getState();
+        store.open({ denBaseUrl: runtime.denBaseUrl, organizationId: runtime.organizationId, principal: runtime.principal, workspaceId: props.workspaceId, sessionId: props.sessionId, proposalId: props.part.toolCallId });
+        const saved = agentChatFor(useAgentChatStore.getState().chats, runtime, props.sessionId);
+        const progress = await startAgentFromProposal({
+          api: {
+            createAgent: (input) => runtime.client.createPersonalAgent(runtime.organizationId, input),
+            createRoutine: (agentId, input) => runtime.client.createPersonalAgentRoutine(runtime.organizationId, agentId, input),
+            runNow: (agentId, routineId) => runtime.client.runPersonalAgentNow(runtime.organizationId, agentId, { routineId }),
+          },
+          proposal,
+          idempotencyKey: await agentProposalKey(props.sessionId, props.part.toolCallId),
+          linkChat: (agentId) => runtime.client.setPersonalAgentChat(runtime.organizationId, agentId, { workspaceId: props.workspaceId, sessionId: props.sessionId }),
+          saved: {
+            agentId: saved?.agentId ?? null,
+            agentName: saved?.agentName ?? null,
+            routineId: saved?.routineId ?? null,
+            routineName: saved?.routineName ?? null,
+            firstRunId: saved?.firstRunId ?? null,
+          },
+          save: (next) => useAgentChatStore.getState().save(runtime, props.sessionId, next),
+        });
+        if (progress.agentName) runtime.renameSession(props.workspaceId, props.sessionId, progress.agentName);
+        return progress;
       });
-      if (progress.agentName) runtime.renameSession(props.workspaceId, props.sessionId, progress.agentName);
-      return progress;
-    }),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: agentListKey(runtime?.organizationId ?? null) }),
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: agentListKey(runtime) }),
   });
 
   if (!proposal) return null;

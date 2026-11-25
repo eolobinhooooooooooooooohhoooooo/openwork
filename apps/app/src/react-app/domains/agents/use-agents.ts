@@ -5,7 +5,7 @@ import type { AutomationRun } from "@openwork/types/automations";
 import { t } from "@/i18n";
 
 import { agentChatFor, useAgentChatStore } from "./agent-chat-store";
-import type { AgentsRuntime } from "./agents-runtime";
+import type { AgentScope, AgentsRuntime } from "./agents-runtime";
 
 const ACTIVE_RUN_STATUSES: readonly AutomationRun["status"][] = ["queued", "claimed", "running"];
 const ACTIVE_POLL_MS = 5_000;
@@ -15,24 +15,24 @@ export function isActiveRun(run: Pick<AutomationRun, "status"> | null | undefine
   return Boolean(run && ACTIVE_RUN_STATUSES.includes(run.status));
 }
 
-export function agentsQueryRoot(organizationId: string | null) {
-  return ["den", "personal-agents", organizationId] as const;
+export function agentsQueryRoot(scope: AgentScope | null) {
+  return [scope?.denBaseUrl || "den", "personal-agents", scope?.organizationId ?? null, scope?.principal ?? null] as const;
 }
 
-export function agentListKey(organizationId: string | null) {
-  return [...agentsQueryRoot(organizationId), "list"] as const;
+export function agentListKey(scope: AgentScope | null) {
+  return [...agentsQueryRoot(scope), "list"] as const;
 }
 
-export function agentRequestsKey(organizationId: string | null, agentId: string | null) {
-  return [...agentsQueryRoot(organizationId), "requests", agentId] as const;
+export function agentRequestsKey(scope: AgentScope | null, agentId: string | null) {
+  return [...agentsQueryRoot(scope), "requests", agentId] as const;
 }
 
 export function useAgentListQuery(runtime: AgentsRuntime | null, poll = false) {
-  const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime?.organizationId ?? null, runtime?.selectedSessionId ?? null));
+  const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime, runtime?.selectedSessionId ?? null));
   const requests = useAgentRequestsQuery(runtime, chat?.agentId ?? null, false, false).data;
   const pending = requests?.some((request) => request.status === "pending");
   return useQuery({
-    queryKey: agentListKey(runtime?.organizationId ?? null),
+    queryKey: agentListKey(runtime),
     queryFn: async () => runtime ? (await runtime.client.listPersonalAgents(runtime.organizationId)).items : [],
     enabled: runtime !== null && poll,
     staleTime: IDLE_POLL_MS,
@@ -57,7 +57,7 @@ export function useAgentNames(runtime: AgentsRuntime | null): ReadonlyMap<string
 
 export function useAgentRunQuery(runtime: AgentsRuntime, agentId: string, runId: string, active: boolean) {
   return useQuery({
-    queryKey: [...agentsQueryRoot(runtime.organizationId), "run", agentId, runtime.principalId, runId],
+    queryKey: [...agentsQueryRoot(runtime), "run", agentId, runId],
     queryFn: () => runtime.client.getPersonalAgentRun(runtime.organizationId, agentId, runId),
     retry: 1,
     staleTime: (query) => isActiveRun(query.state.data?.run) ? 0 : Infinity,
@@ -67,20 +67,20 @@ export function useAgentRunQuery(runtime: AgentsRuntime, agentId: string, runId:
 
 export function useAgentRunsQuery(runtime: AgentsRuntime | null, agentId: string | null, active: boolean) {
   return useQuery({
-    queryKey: [...agentRunsKey(runtime?.organizationId ?? null, agentId), runtime?.principalId ?? null],
+    queryKey: agentRunsKey(runtime, agentId),
     queryFn: async () => runtime && agentId ? (await runtime.client.listPersonalAgentRuns(runtime.organizationId, agentId)).items : [],
     enabled: runtime !== null && agentId !== null,
     refetchInterval: (query) => active || query.state.data?.some(isActiveRun) ? ACTIVE_POLL_MS : IDLE_POLL_MS,
   });
 }
 
-function agentRunsKey(organizationId: string | null, agentId: string | null) {
-  return [...agentsQueryRoot(organizationId), "runs", agentId] as const;
+function agentRunsKey(scope: AgentScope | null, agentId: string | null) {
+  return [...agentsQueryRoot(scope), "runs", agentId] as const;
 }
 
 export function useAgentRequestsQuery(runtime: AgentsRuntime | null, agentId: string | null, pending: boolean, enabled = true) {
   return useQuery({
-    queryKey: agentRequestsKey(runtime?.organizationId ?? null, agentId),
+    queryKey: agentRequestsKey(runtime, agentId),
     queryFn: async () => runtime && agentId ? (await runtime.client.listPersonalAgentRequests(runtime.organizationId, agentId)).items : [],
     enabled: enabled && runtime !== null && agentId !== null,
     refetchInterval: (query) => !enabled ? false : pending || query.state.data?.some((request) => request.status === "pending") ? ACTIVE_POLL_MS : IDLE_POLL_MS,
@@ -89,28 +89,29 @@ export function useAgentRequestsQuery(runtime: AgentsRuntime | null, agentId: st
 
 export function useAgentActions(runtime: AgentsRuntime | null) {
   const queryClient = useQueryClient();
-  const organizationId = runtime?.organizationId ?? null;
   const runNow = useMutation({
+    mutationKey: [...agentsQueryRoot(runtime), "run-now"],
     mutationFn: async (input: { agentId: string; routineId: string | undefined }) => {
       if (!runtime) throw new Error(t("agents.start_sign_in"));
       return runtime.client.runPersonalAgentNow(runtime.organizationId, input.agentId, { routineId: input.routineId });
     },
     onSettled: async (_data, _error, input) => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: agentListKey(organizationId) }),
-        queryClient.invalidateQueries({ queryKey: agentRunsKey(organizationId, input.agentId) }),
-        queryClient.invalidateQueries({ queryKey: agentRequestsKey(organizationId, input.agentId) }),
+        queryClient.invalidateQueries({ queryKey: agentListKey(runtime) }),
+        queryClient.invalidateQueries({ queryKey: agentRunsKey(runtime, input.agentId) }),
+        queryClient.invalidateQueries({ queryKey: agentRequestsKey(runtime, input.agentId) }),
       ]);
     },
   });
   const setActive = useMutation({
+    mutationKey: [...agentsQueryRoot(runtime), "set-active"],
     mutationFn: async (input: { agentId: string; routineIds: string[]; active: boolean }) => {
       if (!runtime) throw new Error(t("agents.start_sign_in"));
       for (const routineId of input.routineIds) {
         await runtime.client.updatePersonalAgentRoutine(runtime.organizationId, input.agentId, routineId, { active: input.active });
       }
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: agentListKey(organizationId) }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: agentListKey(runtime) }),
   });
   return { runNow, setActive };
 }

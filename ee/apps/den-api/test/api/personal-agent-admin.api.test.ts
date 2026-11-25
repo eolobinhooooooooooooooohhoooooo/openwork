@@ -8,6 +8,7 @@ import {
   personalAgentEventListSchema,
   personalAgentListSchema,
   personalAgentOrgPolicySchema,
+  personalAgentRunListSchema,
 } from "@openwork/types/den/personal-agents"
 import { createDenTypeId } from "@openwork-ee/utils/typeid"
 import { gatewayFixtureEnv, grantGatewayModels, stubPublicModelCatalog } from "./gateway-fixture.js"
@@ -148,6 +149,21 @@ test("admins can manage agents across owners without getting their briefs", asyn
   }
   const foreignOwner = await asLee("POST", `${adminAgent}/transfer`, { memberId: otherLee.memberId })
   assert.equal(foreignOwner.status, 400, summary(foreignOwner))
+  const { automationRepository } = await import("../../src/automations/repository.js")
+  const { db } = await import("../../src/db.js")
+  const { AutomationRunTable } = await import("@openwork-ee/den-db/schema")
+  const { eq } = await import("@openwork-ee/den-db/drizzle")
+  const { normalizeDenTypeId } = await import("@openwork-ee/utils/typeid")
+  const revision = automationDetailSchema.parse(routineCreated.body).revision
+  const now = Date.now()
+  const queued = await automationRepository.claim({ automation: routine, revision, trigger: "scheduled", scheduledFor: now, leaseOwner: "fixture", leaseMs: 60_000, now })
+  const legacy = await automationRepository.claim({ automation: routine, revision, trigger: "manual", scheduledFor: null, nonce: "legacy", leaseOwner: "fixture", leaseMs: 60_000, now })
+  const actorFor = async (id: string) => (await db.$primary.select({ actor: AutomationRunTable.acting_member_id }).from(AutomationRunTable)
+    .where(eq(AutomationRunTable.id, normalizeDenTypeId("automationRun", id))).limit(1))[0]?.actor
+  assert.equal(await actorFor(queued.run.id), dana.memberId)
+  await db.update(AutomationRunTable).set({ acting_member_id: null }).where(eq(AutomationRunTable.id, normalizeDenTypeId("automationRun", legacy.run.id)))
+  assert.equal((await asDana("GET", `${memberAgent}/runs/${legacy.run.id}`)).status, 200)
+  const dueBeforeTransfer = automationDetailSchema.parse((await asDana("GET", `/v1/automations/${routine.id}`)).body).automation.nextDueAt
   const transferred = await asLee("POST", `${adminAgent}/transfer`, { memberId: sam.memberId })
   assert.equal(transferred.status, 200, summary(transferred))
   const moved = personalAgentAdminItemSchema.parse(transferred.body)
@@ -161,7 +177,13 @@ test("admins can manage agents across owners without getting their briefs", asyn
   assert.equal(samRoutine.status, 200, summary(samRoutine))
   const movedRoutine = automationDetailSchema.parse(samRoutine.body).automation
   assert.equal(movedRoutine.ownerMemberId, sam.memberId)
-  assert.equal(movedRoutine.nextDueAt, routine.nextDueAt)
+  assert.equal(movedRoutine.nextDueAt, dueBeforeTransfer)
+  assert.equal(await actorFor(queued.run.id), dana.memberId)
+  assert.equal(await actorFor(legacy.run.id), dana.memberId)
+  assert.equal((await asSam("GET", `${memberAgent}/runs/${legacy.run.id}`)).status, 404)
+  const samRuns = await asSam("GET", `${memberAgent}/runs`)
+  assert.deepEqual(personalAgentRunListSchema.parse(samRuns.body).items, [])
+  assert.equal(personalAgentDetailSchema.parse((await asSam("GET", memberAgent)).body).routines[0]?.latestRun, null)
 
   const archived = await asLee("POST", `${adminAgent}/archive`)
   assert.equal(archived.status, 200, summary(archived))

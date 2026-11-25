@@ -13,7 +13,8 @@ import type { AuditServiceActionName } from "../audit/service-actions.js"
 import { isPlatformAdminUserId } from "../middleware/admin.js"
 import { mcpPrincipalCredentialId, type McpPrincipal } from "./auth.js"
 import { catalogOperationAvailableToCapabilities, filterGmailThreadRead, filterPersonalAgents } from "./catalog-availability.js"
-import { isLimitedAgentRun, LIMITED_AGENT_RUN_MESSAGE } from "./workbot-turn-limits.js"
+import { PERSONAL_AGENT_UNAPPROVABLE_WRITE, personalAgentPolicyRefusal, personalAgentRunDispatchRefusal } from "../personal-agents/permissions-dispatch.js"
+import { isLimitedAgentRun, LIMITED_AGENT_RUN_MESSAGE, personalAgentRunId } from "./workbot-turn-limits.js"
 import type { McpToolOperation } from "./catalog.js"
 import {
   executeAdminCapability,
@@ -471,6 +472,7 @@ async function executeMarketplaceSource(
     validateScriptOutput: true,
     redirectUriBase: ctx.redirectUriBase,
     auditWorkflowExecution: workflowExecutionAudit(ctx),
+    readOnly: personalAgentRunId(ctx.principal.scopes) !== undefined,
     usageSource: ctx.usageSource,
     describeUnavailable: (missing) => liveArtifactConnectionFailure(ctx, missing),
   })
@@ -898,6 +900,11 @@ export function createCapabilityRegistry(sources: Record<CapabilitySourceKind, C
         const source = sources[kind]
         const parsed = source.parseName(input.name)
         if (!parsed) continue
+        const refusal = await personalAgentRunDispatchRefusal(ctx.principal.scopes, ctx.organizationId)
+        if (refusal) return capabilityErrorResult(refusal)
+        if (personalAgentRunId(ctx.principal.scopes) !== undefined && capabilityHasNoApprovalPath(parsed)) {
+          return capabilityErrorResult(personalAgentPolicyRefusal(PERSONAL_AGENT_UNAPPROVABLE_WRITE))
+        }
         const call = capabilityCallInput(
           input.arguments === undefined ? input : { ...input, arguments: normalizeToolBody(input.arguments) },
           HTTP_ARGUMENT_KINDS.has(kind),
@@ -911,7 +918,7 @@ export function createCapabilityRegistry(sources: Record<CapabilitySourceKind, C
         const result = await sources[kind].enumerate(ctx, required)
         return "excluded" in result ? [] : result
       }))
-      const leaves = enumerated.flat()
+      const leaves = enumerated.flat().filter((leaf) => personalAgentRunId(ctx.principal.scopes) === undefined || !leaf.capabilityName.startsWith("admin:"))
       const namespaceTools = new Map<string, Map<string, Tool.Definition>>()
       for (const leaf of leaves) {
         const tools = namespaceTools.get(leaf.namespace) ?? new Map<string, Tool.Definition>()
@@ -929,6 +936,11 @@ export function createCapabilityRegistry(sources: Record<CapabilitySourceKind, C
       }
     },
   }
+}
+
+function capabilityHasNoApprovalPath(parsed: ParsedCapability): boolean {
+  if (parsed.kind === "admin" || parsed.kind === "slackSendAsBot") return true
+  return parsed.kind === "remoteSession" && !["read", "list", "targets", "status"].includes(parsed.action)
 }
 
 const HTTP_ARGUMENT_KINDS: ReadonlySet<CapabilitySourceKind> = new Set(["catalog", "native"])

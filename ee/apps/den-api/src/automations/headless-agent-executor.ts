@@ -19,6 +19,7 @@ import { DEN_MCP_HEADLESS_RUN_TOKEN_MAX_TTL_MS } from "../mcp/headless-run-token
 import { connectionBlockedExecution, type CloudAgentEvent, type CloudAgentExecution, type CloudAgentExecutorInput } from "./cloud-agent-executor.js"
 import { cloudAutomationRuntime } from "./headless-runtime.js"
 import { organizationCloudModel } from "../workbot/model.js"
+import { headlessRunCostMicros, headlessRunPricing } from "./headless-run-pricing.js"
 import { cloudAgentGatewayCatalog } from "../workbot/gateway-model.js"
 
 const POLL_INTERVAL_MS = 2_000
@@ -104,11 +105,11 @@ function defaultDeps(): HeadlessAgentExecutorDeps {
   }
 }
 
-function usageFromTurn(turn: RunnerTurn | undefined): AutomationUsage {
+function usageFromTurn(turn: RunnerTurn, rates: unknown): AutomationUsage {
   return {
     inputTokens: turn?.usage?.inputTokens ?? null,
     outputTokens: turn?.usage?.outputTokens ?? null,
-    costMicros: null,
+    costMicros: headlessRunCostMicros(rates, turn.usage),
   }
 }
 
@@ -153,8 +154,7 @@ function failure(input: {
   }
 }
 
-function turnFailure(turn: RunnerTurn, messages: RunnerMessage[]): CloudAgentExecution {
-  const usage = usageFromTurn(turn)
+function turnFailure(turn: RunnerTurn, messages: RunnerMessage[], usage: AutomationUsage): CloudAgentExecution {
   const events = [...transcriptEvents(messages, usage), { type: "terminal" as const, payload: { status: "failed", code: turn.error } }]
   const code = turn.error ?? "headless_run_failed"
   if (code === "turn_timeout") {
@@ -235,6 +235,8 @@ export async function executeHeadlessAgent(
         return failure({ code: "provider_unavailable", message: "The selected cloud model is not available to the person this run uses. Check their model access and try again.", needsAttention: true })
       }
     }
+    let pricing = await headlessRunPricing(input.organizationId, model)
+    if (pricing) await input.onModelResolved?.(pricing.model)
     let modelAccessRequired = storedTurn?.modelAccessRequired === true
     const ttlMs = Math.min(input.maximumRuntimeMs + TOKEN_GRACE_MS, DEN_MCP_HEADLESS_RUN_TOKEN_MAX_TTL_MS)
     const runSessionId = sessionId
@@ -279,7 +281,11 @@ export async function executeHeadlessAgent(
       const turn = read.value.turns.find((entry) => entry.messageId === messageId)
       if (!turn || ACTIVE_TURN_STATUSES.has(turn.status)) continue
       if (turn.status === "interrupted") {
-        model = turn.model ?? model
+        if (turn.model && turn.model !== model) {
+          model = turn.model
+          pricing = await headlessRunPricing(input.organizationId, model)
+          if (pricing) await input.onModelResolved?.(pricing.model)
+        }
         modelAccessRequired ||= turn.modelAccessRequired === true
         const resumed = await sendTurn()
         if (!resumed) return accessFailure()
@@ -289,12 +295,11 @@ export async function executeHeadlessAgent(
         }
         continue
       }
+      const usage = usageFromTurn(turn, pricing?.rates)
       if (turn.status === "aborted") {
-        return failure({ code: "cancelled", status: "cancelled", message: "The Automation run was cancelled.", events: [{ type: "terminal", payload: { status: "cancelled" } }] })
+        return failure({ code: "cancelled", status: "cancelled", message: "The Automation run was cancelled.", usage, events: [{ type: "terminal", payload: { status: "cancelled" } }] })
       }
-      if (turn.status === "failed") return turnFailure(turn, read.value.messages)
-
-      const usage = usageFromTurn(turn)
+      if (turn.status === "failed") return turnFailure(turn, read.value.messages, usage)
       const answer = read.value.messages.filter((message) => message.role === "assistant" && message.toolCalls.length === 0).at(-1)
       const resultSummary = (answer?.role === "assistant" ? answer.text : read.value.finalAssistantText).trim()
         || "The Automation run finished without a written result."

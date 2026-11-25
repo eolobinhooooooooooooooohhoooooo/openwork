@@ -58,7 +58,7 @@ function AgentRow({ orgId, item, members, now }: {
   return <tr data-agent-row={name}>
     <th scope="row" className={`${cells} font-medium`}>
       <div className="flex items-center gap-2">
-        <span aria-hidden="true" className={`grid size-7 shrink-0 place-items-center rounded-full ${agentFaceColor(name)}`}>{Array.from(name)[0]?.toLocaleUpperCase()}</span>
+        <span aria-hidden="true" className={`grid size-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold ${agentFaceColor(name)}`}>{Array.from(name)[0]?.toLocaleUpperCase()}</span>
         <div className="min-w-0">
           <div className="break-words">{name}</div>
           {pausedAt !== null ? <DenBadge size="sm">Paused</DenBadge> : null}

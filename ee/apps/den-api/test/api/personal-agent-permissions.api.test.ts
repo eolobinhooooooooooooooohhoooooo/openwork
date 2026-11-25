@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { after, test } from "node:test"
 import { automationDetailSchema, automationRunReceiptSchema } from "@openwork/types/automations"
-import { personalAgentDetailSchema, personalAgentRequestListSchema, personalAgentRequestSchema, personalAgentRunResponseSchema, personalAgentToolCatalogSchema } from "@openwork/types/den/personal-agents"
+import { personalAgentDetailSchema, personalAgentEventListSchema, personalAgentRequestListSchema, personalAgentRequestSchema, personalAgentRunResponseSchema, personalAgentToolCatalogSchema } from "@openwork/types/den/personal-agents"
 import { bootDen, field, list, startFakeHttpServer, startFakeMcpServer, summary, text } from "./harness.js"
 import { gatewayFixtureEnv, grantGatewayModels, stubPublicModelCatalog } from "./gateway-fixture.js"
 
@@ -106,8 +106,41 @@ function providerCalls() {
   return tracker.wire.filter((entry) => entry.rpcMethod === "tools/call").length
 }
 
+test("the shared native dispatch used by direct and Code Mode calls only allows reads", async () => {
+  const { Hono } = await import("hono")
+  const { z } = await import("zod")
+  const { invokeMcpOperation } = await import("../../src/mcp/invoke.js")
+  const { personalAgentRunScope } = await import("../../src/mcp/workbot-turn-limits.js")
+  const { automationRepository } = await import("../../src/automations/repository.js")
+  const routine = await automationRepository.get({ organizationId: orgId, ownerMemberId: dana.memberId, automationId: routineId })
+  assert.ok(routine)
+  const claim = await automationRepository.claim({ ...routine, trigger: "manual", scheduledFor: null, nonce: "native-dispatch", leaseOwner: "fixture", leaseMs: 60_000, now: Date.now() })
+  const app = new Hono()
+  const path = "/v1/capabilities/google-workspace/calendar-events"
+  let calls = 0
+  app.all(path, (c) => { calls += 1; return c.json({ read: true }) })
+  const principal = { organizationId: orgId, userId: dana.userId, scopes: new Set(["mcp:read", "mcp:write", personalAgentRunScope(claim.run.id)]), payload: {} }
+  const call = (method: string) => invokeMcpOperation({ app, env: {}, operation: { name: "calendar", method, path, operation: {}, inputSchema: z.object({}) }, principal, nativeConnectionId: "google-workspace", toolInput: {}, includePayload: true })
+  const refused = await call("POST")
+  assert.equal(refused.isError, true)
+  assert.equal(field(refused.payload, "error"), "policy_blocked")
+  assert.equal(field(refused.payload, "retryable"), false)
+  assert.equal(field(refused.payload, "message"), "Built-in connectors cannot ask first yet, so an agent can only read them.")
+  assert.equal(calls, 0)
+  assert.equal((await call("GET")).isError, false)
+  assert.equal(calls, 1)
+  const cancelled = await asDana("POST", `/v1/automation-runs/${claim.run.id}/cancel`)
+  assert.equal(cancelled.status, 200, summary(cancelled))
+})
+
 test("writes are listed but ask without a provider call and only one pending card is recorded", async () => {
   const { run: receipt, token } = await admitted()
+  const slack = await den.callMcpTool(token, "execute_capability", { name: "slack_send_as_bot", body: { target: "me", text: "Fixture note" } })
+  assert.equal(field(slack.body, "error"), "policy_blocked", slack.raw)
+  assert.equal(field(slack.body, "retryable"), false, slack.raw)
+  const skill = await den.callMcpTool(token, "create_skill", { pluginName: "Fixture skill", skillMarkdown: "# Fixture skill" })
+  assert.equal(field(skill.body, "error"), "policy_blocked", skill.raw)
+  assert.equal((await den.callMcpTool(token, "list_skills", {})).isError, false)
   const found = await den.callMcpTool(token, "search_capabilities", { query: "bug tracker create issue", limit: 20 })
   assert.ok(list(field(found.body, "matches")).some((row) => row.name === `mcp:${connectionId}:create_issue`), found.raw)
   const catalog = personalAgentToolCatalogSchema.parse((await asPriya("GET", `${path}/tools`)).body)
@@ -187,13 +220,43 @@ test("a collaborator can request a schedule change and a manager can approve it"
   assert.equal(created.status, 201, summary(created))
   const waiting = personalAgentRequestSchema.parse(created.body)
   assert.deepEqual(waiting.canDecide, [])
+  assert.equal(waiting.requestedByCaller, true)
+  assert.equal((await requests(asSam)).find((entry) => entry.id === waiting.id)?.requestedByCaller, false)
   const refused = await decide(asPriya, waiting.id, "approve")
   assert.equal(refused.status, 403, summary(refused))
   const accepted = await decide(asSam, waiting.id, "approve")
   assert.equal(accepted.status, 200, summary(accepted))
-  assert.equal(personalAgentRequestSchema.parse(accepted.body).status, "approved")
+  const approved = personalAgentRequestSchema.parse(accepted.body)
+  assert.equal(approved.status, "approved")
+  assert.equal(approved.requestedByCaller, false)
+  const events = personalAgentEventListSchema.parse((await asDana("GET", `/v1/org/personal-agent-events?agentId=${agent.agent.id}`)).body).items
+  const details = events.filter(({ action, detail }) => action.startsWith("request.") && detail.kind === "change")
+  assert.deepEqual(details.map(({ detail }) => detail), [
+    { requester: "Priya Nair", kind: "change", tool: null, connection: null, changes: "schedule" },
+    { requester: "Priya Nair", kind: "change", tool: null, connection: null, changes: "schedule" },
+  ])
+  assert.doesNotMatch(JSON.stringify(events), /Run at eleven/)
   const routine = await asDana("GET", `/v1/automations/${routineId}`)
   assert.deepEqual(automationDetailSchema.parse(routine.body).revision.schedule, moved)
+})
+
+test("admin pause and tool blocks apply to an already issued run credential", async () => {
+  const admin = `/v1/org/personal-agents/${agent.agent.id}`
+  const policy = "/v1/org/personal-agent-policy"
+  assert.equal((await asDana("PUT", policy, { toolPolicy: { tools: {} } })).status, 200)
+  const { token } = await admitted()
+  assert.equal((await execute(token)).isError, false)
+  const before = providerCalls()
+  assert.equal((await asDana("PUT", policy, { toolPolicy: { tools: { [connectionId]: { create_issue: "block" } } } })).status, 200)
+  const blocked = await execute(token)
+  assert.equal(field(blocked.body, "error"), "policy_blocked", blocked.raw)
+  assert.equal((await asDana("PUT", policy, { toolPolicy: { tools: {} } })).status, 200)
+  assert.equal((await asDana("POST", `${admin}/pause`)).status, 200)
+  const paused = await execute(token)
+  assert.equal(field(paused.body, "message"), "An admin paused this agent.", paused.raw)
+  assert.equal(providerCalls(), before)
+  assert.equal((await asDana("POST", `${admin}/resume`)).status, 200)
+  assert.equal((await execute(token)).isError, false)
 })
 
 test("paused and over-budget agents do not start a runner turn", async () => {
@@ -227,5 +290,12 @@ test("never matches all words ignoring case and punctuation and falls back to wr
   assert.deepEqual(matchPersonalAgentNeverTools(tools, "MESSAGE, post!"), ["post_message"])
   assert.deepEqual(matchPersonalAgentNeverTools(tools, "read message"), ["get_message"])
   assert.deepEqual(matchPersonalAgentNeverTools(tools, "send message"), ["post_message", "delete_message"])
-  assert.deepEqual(matchPersonalAgentNeverTools(tools), ["post_message", "delete_message"])
+  const { personalAgentNeverBlocks } = await import("../../src/personal-agents/never.js")
+  const caller = { organizationId: orgId, memberId: dana.memberId }
+  assert.deepEqual(await personalAgentNeverBlocks(caller, [{ app: "Bug tracker" }]), {
+    connections: { [connectionId]: "block" }, tools: {},
+  })
+  assert.deepEqual(await personalAgentNeverBlocks(caller, [{ app: "Bug tracker", action: "Not matched" }]), {
+    connections: {}, tools: { [connectionId]: { create_issue: "block", delete_issue: "block" } },
+  })
 })

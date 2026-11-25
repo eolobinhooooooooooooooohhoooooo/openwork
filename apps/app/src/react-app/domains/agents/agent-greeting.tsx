@@ -7,7 +7,7 @@ import { useAgentsRuntime } from "./agents-runtime";
 
 export function AgentGreeting(props: SessionGreetingProps) {
   const runtime = useAgentsRuntime();
-  const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime?.organizationId ?? null, props.sessionId));
+  const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime, props.sessionId));
   if (!chat) return null;
   if (isStandingChat(chat)) {
     return (

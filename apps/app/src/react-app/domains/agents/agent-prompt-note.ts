@@ -5,6 +5,7 @@ import { getReactQueryClient } from "@/react-app/infra/query-client";
 
 import { agentChatFor, isStandingChat, useAgentChatStore, type AgentChat } from "./agent-chat-store";
 import { firstName } from "./agent-words";
+import type { AgentScope } from "./agents-runtime";
 import { agentListKey } from "./use-agents";
 
 const SCHEDULE_SHAPES = 'The schedule is exactly one of these shapes, with the person\'s IANA timezone and every number a JSON number: {"kind":"daily","timezone":"America/Los_Angeles","hour":9,"minute":0} or {"kind":"weekly","timezone":"America/Los_Angeles","daysOfWeek":[1,2,3,4,5],"hour":9,"minute":0} (0 is Sunday) or {"kind":"interval","timezone":"America/Los_Angeles","everyHours":1,"daysOfWeek":[1,2,3,4,5],"startHour":9,"endHour":18}.';
@@ -19,8 +20,7 @@ const SETUP_NOTE = [
   "Do not create the agent, an Automation or anything else yourself. Never mention ids, capabilities or tool names. If they ask to change the plan, answer in one sentence and call agent.propose again with the change.",
 ].join("\n");
 
-function standingNote(chat: AgentChat): string {
-  const detail = getReactQueryClient().getQueryData<PersonalAgentDetail[]>(agentListKey(chat.organizationId))?.find((item) => item.agent.id === chat.agentId);
+export function standingNote(chat: AgentChat, detail?: PersonalAgentDetail): string {
   const routines = detail?.routines.filter((routine) => routine.state !== "archived").map(({ id, name }) => ({ id, name }))
     ?? (chat.routineId ? [{ id: chat.routineId, name: chat.routineName }] : []);
   return [
@@ -28,7 +28,10 @@ function standingNote(chat: AgentChat): string {
     JSON.stringify({ agentName: detail?.agent.name ?? chat.agentName, personalAgentId: chat.agentId, routines, ownerFirstName: firstName(detail?.owner?.name) }),
     "Reply as that agent, in the first person, in one or two plain sentences. No headings, tables or ids.",
     "Its routines run in OpenWork Cloud and their results appear in this chat. To run it now, use runPersonalAgentNow with path { id: the agent id } and body { routineId } for the routine requested or the first routine by default. Tell the person the result will appear here. Tools that change something ask the person first; the answer card appears in this chat. Never create another agent or Automation from this chat.",
-    ...(detail?.role === "collaborator" ? [
+    ...(!detail ? [
+      "If they ask for a change, try requestPersonalAgentChange with path { id: the agent id } and body { summary: one plain sentence, change: { routineId, schedule }, { routineId, instructions }, or { brief } }. Say plainly what happened.",
+      SCHEDULE_SHAPES,
+    ] : detail.role === "collaborator" ? [
       "The person cannot change this agent directly. If they ask to change the schedule, use requestPersonalAgentChange with path { id: the agent id } and body { summary: one plain sentence, change: { routineId, schedule } }. For changes to what it does, use change: { routineId, instructions } or change: { brief } instead. Once requested, tell the person in one sentence that the owner (use ownerFirstName if present) was asked to approve the change.",
       SCHEDULE_SHAPES,
     ] : [
@@ -38,9 +41,12 @@ function standingNote(chat: AgentChat): string {
   ].join("\n");
 }
 
-export function agentPromptNoteParts(sessionId: string, organizationId: string | null): Array<TextPartInput & { synthetic: true }> {
-  const chat = agentChatFor(useAgentChatStore.getState().chats, organizationId, sessionId);
+export function agentPromptNoteParts(sessionId: string, scope: AgentScope | null): Array<TextPartInput & { synthetic: true }> {
+  if (!scope) return [];
+  const store = useAgentChatStore.getState();
+  const chat = agentChatFor(store.chats, scope, sessionId);
   if (!chat) return [];
-  useAgentChatStore.getState().markAsked(sessionId);
-  return [{ type: "text", text: isStandingChat(chat) ? standingNote(chat) : SETUP_NOTE, synthetic: true }];
+  store.markAsked(scope, sessionId);
+  const detail = getReactQueryClient().getQueryData<PersonalAgentDetail[]>(agentListKey(scope))?.find((item) => item.agent.id === chat.agentId);
+  return [{ type: "text", text: isStandingChat(chat) ? standingNote(chat, detail) : SETUP_NOTE, synthetic: true }];
 }

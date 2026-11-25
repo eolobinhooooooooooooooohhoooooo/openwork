@@ -120,7 +120,7 @@ import { useAutomationsDenContext } from "@/react-app/domains/automations/use-au
 import { useOrgFeature } from "@/react-app/domains/cloud/use-org-feature";
 import { agentPromptNoteParts } from "@/react-app/domains/agents/agent-prompt-note";
 import { usePersonalAgentSessionExtensions } from "@/react-app/domains/agents/agents-extension";
-import { PersonalAgentsProvider, type AgentsRuntime } from "@/react-app/domains/agents/agents-runtime";
+import { PersonalAgentsProvider, type AgentScope, type AgentsRuntime } from "@/react-app/domains/agents/agents-runtime";
 import { useAgentNames } from "@/react-app/domains/agents/use-agents";
 import { SessionExtensionsProvider } from "@/react-app/kernel/session-extensions";
 import { automationProviderCatalog } from "@/react-app/domains/automations/automation-model-options";
@@ -416,12 +416,13 @@ function focusedWorkbenchPaneOwner() {
     : null;
 }
 
-function personalAgentsOrganizationIdNow(): string | null {
+function personalAgentsOrganizationIdNow(snapshot: { scope: AgentScope; token: string } | null): AgentScope | null {
+  if (!snapshot) return null;
+  const { scope, token } = snapshot;
   const settings = readDenSettings();
-  const organizationId = settings.activeOrgId?.trim() || null;
-  if (!organizationId || !settings.authToken?.trim()) return null;
-  const features = getReactQueryClient().getQueryData<Record<string, boolean>>(["den", "org-features", organizationId]);
-  return features?.personalAgents === true ? organizationId : null;
+  if (settings.activeOrgId?.trim() !== scope.organizationId || settings.baseUrl !== scope.denBaseUrl || settings.authToken?.trim() !== token) return null;
+  const features = getReactQueryClient().getQueryData<Record<string, boolean>>(["den", "org-features", scope.organizationId]);
+  return features?.personalAgents === true ? scope : null;
 }
 
 export function SessionRoute() {
@@ -462,6 +463,18 @@ export function SessionRoute() {
   });
   const automationsRouteActive = automationsSurfaceAvailable && automationsRouteRequested;
   const denSettings = readDenSettings();
+  const personalAgentsIdentity = denAuth.verifiedIdentity;
+  const personalAgentsToken = denSettings.authToken?.trim();
+  const personalAgentsScope = useMemo<AgentScope | null>(() => denAuth.isSignedIn && personalAgentsToken && personalAgentsIdentity
+    && personalAgentsIdentity.organizationId === denSettings.activeOrgId?.trim()
+    ? {
+      denBaseUrl: denSettings.baseUrl,
+      organizationId: personalAgentsIdentity.organizationId,
+      principal: personalAgentsIdentity.principalId,
+    }
+    : null, [denAuth.isSignedIn, denSettings.activeOrgId, denSettings.baseUrl, personalAgentsIdentity, personalAgentsToken]);
+  const personalAgentsSnapshot = useRef<{ scope: AgentScope; token: string } | null>(null);
+  personalAgentsSnapshot.current = personalAgentsScope && personalAgentsToken ? { scope: personalAgentsScope, token: personalAgentsToken } : null;
   const retainedArtifactsScope = dashboardSurfaceAvailable && denAuth.isSignedIn && denAuth.verifiedIdentity
     && denAuth.verifiedIdentity.organizationId === denSettings.activeOrgId
     ? JSON.stringify([denSettings.baseUrl, denSettings.apiBaseUrl, denAuth.verifiedIdentity.principalId, denAuth.verifiedIdentity.organizationId])
@@ -1802,7 +1815,7 @@ export function SessionRoute() {
                   }
 
                   const parts = await draftToParts(draft, selectedWorkspaceRoot, targetSessionId, selectedWorkspaceEndpoint);
-                  parts.push(...agentPromptNoteParts(targetSessionId, personalAgentsOrganizationIdNow()));
+                  parts.push(...agentPromptNoteParts(targetSessionId, personalAgentsOrganizationIdNow(personalAgentsSnapshot.current)));
                   assertCurrent();
                   const system = await buildOpenworkSessionSystemContext(client, {
                     workspaceId: selectedWorkspaceId,
@@ -2176,7 +2189,7 @@ export function SessionRoute() {
                     return;
                   }
                   const parts = await draftToParts(draft, workspaceRoot, targetSessionId, endpoint);
-                  parts.push(...agentPromptNoteParts(targetSessionId, personalAgentsOrganizationIdNow()));
+                  parts.push(...agentPromptNoteParts(targetSessionId, personalAgentsOrganizationIdNow(personalAgentsSnapshot.current)));
                   assertCurrent();
                   const system = await buildOpenworkSessionSystemContext(endpoint.client, {
                     workspaceId: workspace.id,
@@ -2743,11 +2756,10 @@ export function SessionRoute() {
   }, [endpointForSessionWorkspace, reloadWorkspaceSessions, workspaces]);
 
   const agentsRuntime = useMemo<AgentsRuntime | null>(() => {
-    if (!personalAgentsEnabled || !agentsDen.ready || !agentsDen.client || !agentsDen.organizationId || !denAuth.user?.id || !selectedWorkspaceId) return null;
+    if (!personalAgentsEnabled || !agentsDen.ready || !agentsDen.client || !personalAgentsScope || !selectedWorkspaceId) return null;
     return {
+      ...personalAgentsScope,
       client: agentsDen.client,
-      organizationId: agentsDen.organizationId,
-      principalId: denAuth.user.id,
       workspaceId: selectedWorkspaceId,
       selectedSessionId: selectedSessionId ?? null,
       createSession: (workspaceId) => handleCreateTaskInWorkspaceWithOpenMode(workspaceId, "primary"),
@@ -2764,7 +2776,7 @@ export function SessionRoute() {
         }
       },
     };
-  }, [agentsDen.client, agentsDen.organizationId, agentsDen.ready, denAuth.user?.id, handleCreateTaskInWorkspaceWithOpenMode, navigateToWorkspaceSession, opencodeClient, personalAgentsEnabled, renameSessionTitle, selectedSessionId, selectedWorkspaceId]);
+  }, [agentsDen.client, agentsDen.ready, handleCreateTaskInWorkspaceWithOpenMode, navigateToWorkspaceSession, opencodeClient, personalAgentsEnabled, personalAgentsScope, renameSessionTitle, selectedSessionId, selectedWorkspaceId]);
   const sessionExtensions = usePersonalAgentSessionExtensions(agentsRuntime);
   const agentNames = useAgentNames(agentsRuntime);
 

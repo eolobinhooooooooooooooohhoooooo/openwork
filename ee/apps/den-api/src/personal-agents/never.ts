@@ -24,6 +24,10 @@ export async function personalAgentNeverBlocks(caller: PersonalAgentCaller, neve
   for (const connection of connections) {
     const matches = never.filter(({ app }) => connection.name.toLowerCase().includes(app.toLowerCase()))
     if (!matches.length) continue
+    if (matches.some(({ action }) => action === undefined)) {
+      policy.connections[connection.id] = "block"
+      continue
+    }
     const { tools } = await personalAgentConnectionTools(caller, connection)
     const blocked = new Set(matches.flatMap(({ action }) => matchPersonalAgentNeverTools(tools, action)))
     if (blocked.size) policy.tools[connection.id] = Object.fromEntries([...blocked].map((name) => [name, "block"]))

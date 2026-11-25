@@ -1,6 +1,6 @@
 import type { PersonalAgentAccess, PersonalAgentConnectionTools, PersonalAgentDetail, PersonalAgentSpend, PersonalAgentTool } from "@openwork/types/den/personal-agents";
 import { ArrowLeft, ChevronRight, Lock } from "lucide-react";
-import { useId } from "react";
+import { useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -61,6 +61,8 @@ function ConnectionRow({ connection, collaboratorReason, saving, onChange }: {
   saving: boolean;
   onChange: (toolName: string, access: PersonalAgentAccess) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const toolsId = useId();
   const summary = (
     <span className="min-w-0 flex-1">
       <span className="block wrap-anywhere text-[13px] font-medium text-dls-text">{connection.name}</span>
@@ -73,34 +75,43 @@ function ConnectionRow({ connection, collaboratorReason, saving, onChange }: {
   }
 
   return (
-    <details data-agent-connection={connection.name} className="group/connection border-t border-dls-border">
-      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-sm py-1.5 focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+    <div data-agent-connection={connection.name} className="border-t border-dls-border">
+      <button
+        type="button"
+        data-agent-connection-toggle
+        aria-expanded={expanded}
+        aria-controls={toolsId}
+        onClick={() => setExpanded((value) => !value)}
+        className="group flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-sm py-1.5 text-start focus-visible:outline-2 focus-visible:outline-ring"
+      >
         {summary}
-        <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-dls-secondary transition-transform group-open/connection:rotate-90" />
-      </summary>
-      {[false, true].map((write) => {
-        const tools = connection.tools.filter((tool) => tool.write === write);
-        if (!tools.length) return null;
-        return (
-          <div key={String(write)} className="pb-1 pl-2.5">
-            <h4 className="pb-1 pt-1.5 text-xs font-medium text-dls-secondary">{write ? t("agents.permissions_changes") : t("agents.permissions_reads")}</h4>
-            <ul>
-              {tools.map((tool) => (
-                <ToolRow
-                  key={tool.name}
-                  tool={tool}
-                  lockReason={tool.lockedByOrganization || connection.lockedByOrganization
-                    ? t("agents.permissions_admin_blocked")
-                    : collaboratorReason ?? (connection.blocked ? t("agents.permissions_connection_blocked") : null)}
-                  saving={saving}
-                  onChange={(access) => onChange(tool.name, access)}
-                />
-              ))}
-            </ul>
-          </div>
-        );
-      })}
-    </details>
+        <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-dls-secondary transition-transform group-aria-expanded:rotate-90" />
+      </button>
+      <div id={toolsId} hidden={!expanded}>
+        {expanded && [false, true].map((write) => {
+          const tools = connection.tools.filter((tool) => tool.write === write);
+          if (!tools.length) return null;
+          return (
+            <div key={String(write)} className="pb-1 pl-2.5">
+              <h4 className="pb-1 pt-1.5 text-xs font-medium text-dls-secondary">{write ? t("agents.permissions_changes") : t("agents.permissions_reads")}</h4>
+              <ul>
+                {tools.map((tool) => (
+                  <ToolRow
+                    key={tool.name}
+                    tool={tool}
+                    lockReason={tool.lockedByOrganization || connection.lockedByOrganization
+                      ? t("agents.permissions_admin_blocked")
+                      : collaboratorReason ?? (connection.blocked ? t("agents.permissions_connection_blocked") : null)}
+                    saving={saving}
+                    onChange={(access) => onChange(tool.name, access)}
+                  />
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

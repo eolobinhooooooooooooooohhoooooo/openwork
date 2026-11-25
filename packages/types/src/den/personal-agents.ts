@@ -335,6 +335,7 @@ export const personalAgentRequestSchema = z.object({
   kind: personalAgentRequestKindSchema,
   status: personalAgentRequestStatusSchema,
   requestedBy: personalAgentPersonSchema,
+  requestedByCaller: z.boolean().default(false).describe("True when the caller is the person the request is for."),
   runId: idSchema.nullable(),
   connectionId: z.string().max(160).nullable(),
   connectionName: z.string().max(160).nullable(),

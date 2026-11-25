@@ -467,7 +467,8 @@ export class AutomationService {
   async runNow(scope: OwnerScope, automationId: string, options: AutomationRunNowOptions = {}): Promise<AutomationRun | null> {
     const current = await this.get(scope, automationId)
     if (!current || current.automation.state === "archived") return null
-    const actingMemberId = current.automation.agentId && options.actingMemberId !== scope.ownerMemberId ? options.actingMemberId : undefined
+    const actingMemberId = current.automation.agentId ? options.actingMemberId ?? scope.ownerMemberId : undefined
+    const sharedRun = actingMemberId !== undefined && actingMemberId !== scope.ownerMemberId
     const actorScope = actingMemberId ? { ...scope, ownerMemberId: actingMemberId } : scope
     const savedTarget = current.revision.executionTarget ?? "desktop"
     const target = options.executionTarget ?? savedTarget
@@ -479,7 +480,7 @@ export class AutomationService {
       if (target === "cloud") await this.requireCloudRuntimeAccess(actorScope)
     }
     const revision = { ...current.revision, executionTarget: target }
-    let blocked = actingMemberId ? null : current.automation.needsAttentionReason
+    let blocked = sharedRun ? null : current.automation.needsAttentionReason
     if (current.revision.action?.kind === "saved_script") {
       if (!await isActiveAutomationOwner(scope)) throw new Error("automation_owner_inactive")
     } else if (!blocked) {
@@ -493,7 +494,7 @@ export class AutomationService {
     }
     if (blocked) {
       const now = Date.now()
-      if (!actingMemberId && ownPlacement(current.revision, target)) await automationRepository.markNeedsAttention({
+      if (!sharedRun && ownPlacement(current.revision, target)) await automationRepository.markNeedsAttention({
         automationId: current.automation.id,
         expectedRevisionId: current.revision.id,
         reason: { ...blocked, occurredAt: now },
@@ -529,7 +530,7 @@ export class AutomationService {
     if (claim.kind === "claimed" && claim.run.executionTarget === "cloud") {
       this.startCloudRun(claim.run.id)
     }
-    return (await automationRepository.getRunReceipt({ ...scope, runId: claim.run.id, actingMemberId }))?.run ?? claim.run
+    return (await automationRepository.getRunReceipt({ ...scope, runId: claim.run.id, actingMemberId, includeOwnerRuns: !sharedRun }))?.run ?? claim.run
   }
 
   listRuns(scope: OwnerScope, automationId: string, input: { cursor?: string; limit?: number }) {
@@ -910,12 +911,7 @@ export class AutomationService {
     })
     if (!claimed) return
     const actorScope = { organizationId: claimed.automation.organizationId, ownerMemberId: claimed.actingMemberId ?? claimed.automation.ownerMemberId }
-    if (claimed.actingMemberId && !await isActiveAutomationOwner(actorScope)) {
-      const message = "The person who started this run is no longer a member of this organization."
-      await this.completeCloud({ automationId: claimed.automation.id, runId, leaseOwner, status: "failed", resultSummary: message,
-        updateArtifactState: false, error: { code: "owner_membership_lost", message, retryable: false }, now: Date.now() })
-      return
-    }
+    const ownerRun = actorScope.ownerMemberId === claimed.automation.ownerMemberId
     const webAccess = headlessEngine || (runtime === "headless" && claimed.revision.action?.kind === "saved_script")
       ? { hasAccess: true }
       : await this.getOpenWorkWebAccess(claimed.automation.organizationId, { memberId: actorScope.ownerMemberId })
@@ -927,7 +923,7 @@ export class AutomationService {
         message: OPENWORK_WEB_ACCESS_REQUIRED_MESSAGE,
         now,
       })
-      if (!claimed.actingMemberId && ownPlacement(claimed.revision, "cloud")) await automationRepository.markNeedsAttention({
+      if (ownerRun && ownPlacement(claimed.revision, "cloud")) await automationRepository.markNeedsAttention({
         automationId: claimed.automation.id,
         expectedRevisionId: claimed.revision.id,
         reason: {
@@ -1018,9 +1014,9 @@ export class AutomationService {
       return
     }
 
-    const agentRun = claimed.revision.agentRevisionId
+    const agentRun = claimed.automation.agentId
       ? await admitPersonalAgentRun({
-        agentRevisionId: claimed.revision.agentRevisionId,
+        agentRevisionId: claimed.revision.agentRevisionId ?? undefined,
         runId: claimed.run.id,
         organizationId: claimed.automation.organizationId,
         actingMemberId: claimed.actingMemberId ?? claimed.automation.ownerMemberId,
@@ -1107,6 +1103,7 @@ export class AutomationService {
         workspaceId: runWorkspaceId(claimed.revision, "cloud"),
         ...(agentRun?.mcpScopes.length ? { mcpScopes: agentRun.mcpScopes } : {}),
         signal: controller.signal,
+        onModelResolved: (model) => automationRepository.setCloudRunModel({ runId: claimed.run.id, leaseOwner, model }),
         onAdmitted: async (receipt) => automationRepository.setCloudExecution({
           runId: claimed.run.id,
           leaseOwner,
@@ -1160,7 +1157,7 @@ export class AutomationService {
       error: result.ok ? null : { code: result.code, message: result.message, retryable: result.retryable },
       now: Date.now(),
     })
-    if (!claimed.actingMemberId && !result.ok && result.needsAttention && ownPlacement(claimed.revision, "cloud")) {
+    if ((!claimed.actingMemberId || claimed.actingMemberId === claimed.automation.ownerMemberId) && !result.ok && result.needsAttention && ownPlacement(claimed.revision, "cloud")) {
       const attentionCode = [
         "owner_membership_lost",
         "model_access_lost",

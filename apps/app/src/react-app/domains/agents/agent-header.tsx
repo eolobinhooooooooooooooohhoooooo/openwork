@@ -4,7 +4,7 @@ import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { t } from "@/i18n";
 
-import { agentChatFor, useAgentChatStore } from "./agent-chat-store";
+import { agentChatFor, agentChatKey, useAgentChatStore } from "./agent-chat-store";
 import { AgentFace } from "./agent-face";
 import { useAgentsRuntime } from "./agents-runtime";
 import { useAgentDetail } from "./use-agents";
@@ -13,8 +13,9 @@ export const AGENT_PANEL_ID = "personal-agent-panel";
 
 export function AgentHeaderTitle(props: { sessionId: string | null; children: ReactNode }) {
   const runtime = useAgentsRuntime();
-  const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime?.organizationId ?? null, props.sessionId));
-  const panelOpen = useAgentChatStore((state) => state.panelSessionId !== null && state.panelSessionId === props.sessionId);
+  const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime, props.sessionId));
+  const panelKey = chat ? agentChatKey(chat, chat.sessionId) : null;
+  const panelOpen = useAgentChatStore((state) => panelKey !== null && state.panelChatKey === panelKey);
   const agent = useAgentDetail(runtime, chat?.agentId);
   if (!chat) return props.children;
   const name = agent?.agent.name ?? chat.agentName ?? t("agents.new");
@@ -34,7 +35,7 @@ export function AgentHeaderTitle(props: { sessionId: string | null; children: Re
           aria-controls={panelOpen ? AGENT_PANEL_ID : undefined}
           aria-label={t("agents.panel_open", { name })}
           className="titlebar-no-drag hidden h-7 min-w-0 gap-2 rounded-full bg-dls-hover px-1.5 pe-2 text-[13px] font-medium text-dls-text lg:inline-flex"
-          onClick={() => useAgentChatStore.getState().setPanel(panelOpen ? null : chat.sessionId)}
+          onClick={() => useAgentChatStore.getState().setPanel(panelOpen ? null : panelKey)}
         >
           <AgentFace name={name} />
           <span className="truncate">{name}</span>

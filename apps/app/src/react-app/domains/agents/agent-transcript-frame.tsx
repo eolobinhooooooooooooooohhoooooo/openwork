@@ -9,7 +9,7 @@ type FaceVariables = CSSProperties & { "--agent-letter": string; "--agent-face":
 
 export function AgentTranscriptFrame(props: { sessionId: string; children: ReactNode }) {
   const runtime = useAgentsRuntime();
-  const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime?.organizationId ?? null, props.sessionId));
+  const chat = useAgentChatStore((state) => agentChatFor(state.chats, runtime, props.sessionId));
   if (!chat) return props.children;
   const face: FaceVariables = {
     "--agent-letter": JSON.stringify(agentFaceLetter(chat.agentName)),

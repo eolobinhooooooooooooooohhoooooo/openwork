@@ -11,7 +11,7 @@ import { toast } from "sonner";
 
 import { t } from "@/i18n";
 
-import type { AgentsRuntime } from "./agents-runtime";
+import type { AgentScope, AgentsRuntime } from "./agents-runtime";
 import { agentListKey, agentRequestsKey, agentsQueryRoot } from "./use-agents";
 
 type ToolChoice = { connectionId: string; toolName: string; access: PersonalAgentAccess };
@@ -27,23 +27,26 @@ export function nextAgentToolPolicy(policy: PersonalAgentToolPolicy, { connectio
   };
 }
 
-function agentToolsKey(organizationId: string, agentId: string) {
-  return [...agentsQueryRoot(organizationId), "tools", agentId] as const;
+export function agentToolsKey(scope: AgentScope, agentId: string) {
+  return [...agentsQueryRoot(scope), "tools", agentId] as const;
 }
 
-export function useAgentToolsQuery({ client, organizationId }: AgentsRuntime, agentId: string) {
+export function useAgentToolsQuery(runtime: AgentsRuntime, agentId: string) {
+  const { client, organizationId } = runtime;
   return useQuery({
-    queryKey: agentToolsKey(organizationId, agentId),
+    queryKey: agentToolsKey(runtime, agentId),
     queryFn: () => client.getPersonalAgentTools(organizationId, agentId),
   });
 }
 
-export function useSaveAgentSettings({ client, organizationId }: AgentsRuntime, agent: PersonalAgentDetail) {
+export function useSaveAgentSettings(runtime: AgentsRuntime, agent: PersonalAgentDetail) {
+  const { client, organizationId } = runtime;
   const queryClient = useQueryClient();
   const agentId = agent.agent.id;
-  const toolsKey = agentToolsKey(organizationId, agentId);
-  const listKey = agentListKey(organizationId);
+  const toolsKey = agentToolsKey(runtime, agentId);
+  const listKey = agentListKey(runtime);
   return useMutation({
+    mutationKey: [...toolsKey, "save"],
     mutationFn: (change: SettingsChange) => {
       if (!("tool" in change)) return client.updatePersonalAgent(organizationId, agentId, change);
       const latestAgent = queryClient.getQueryData<PersonalAgentDetail[]>(listKey)?.find((item) => item.agent.id === agentId);
@@ -71,23 +74,24 @@ export function useSaveAgentSettings({ client, organizationId }: AgentsRuntime, 
       if (previous) queryClient.setQueryData(toolsKey, previous);
       toast.error(t("agents.permissions_save_failed"));
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: agentsQueryRoot(organizationId) }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: agentsQueryRoot(runtime) }),
   });
 }
 
 type ToolDecision = Exclude<PersonalAgentRequestDecision, "approve">;
 
-export function useDecideAgentToolRequest({ client, organizationId }: AgentsRuntime, agentId: string, requestId: string, onAllowed: () => void) {
+export function useDecideAgentToolRequest(runtime: AgentsRuntime, agentId: string, requestId: string) {
+  const { client, organizationId } = runtime;
   const queryClient = useQueryClient();
-  const requestsKey = agentRequestsKey(organizationId, agentId);
+  const requestsKey = agentRequestsKey(runtime, agentId);
   return useMutation({
+    mutationKey: [...requestsKey, "decide-tool", requestId],
     mutationFn: (decision: ToolDecision) => client.decidePersonalAgentRequest(organizationId, agentId, requestId, decision),
-    onSuccess: async (updated, decision) => {
+    onSuccess: async (updated) => {
       await queryClient.cancelQueries({ queryKey: requestsKey });
       queryClient.setQueryData<PersonalAgentRequest[]>(requestsKey, (items) => items?.map((item) => item.id === updated.id ? updated : item));
-      if (decision === "allow_once" || decision === "always_allow") onAllowed();
     },
     onError: () => toast.error(t("agents.permission_ask_save_failed")),
-    onSettled: () => { void queryClient.invalidateQueries({ queryKey: agentsQueryRoot(organizationId) }); },
+    onSettled: () => { void queryClient.invalidateQueries({ queryKey: agentsQueryRoot(runtime) }); },
   });
 }

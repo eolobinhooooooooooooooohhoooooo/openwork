@@ -75,12 +75,13 @@ export function latestAgentRun(routines: PersonalAgentAdminItem["routines"]) {
 }
 
 const facePalette = [
-  "bg-sky-100 text-sky-900", "bg-teal-100 text-teal-900", "bg-amber-100 text-amber-900",
-  "bg-rose-100 text-rose-900", "bg-indigo-100 text-indigo-900",
+  "bg-[#e5484d] text-white", "bg-[#0090ff] text-white", "bg-[#8e4ec6] text-white", "bg-[#f76b15] text-white",
+  "bg-[#30a46c] text-white", "bg-[#d6409f] text-white", "bg-[#00a2c7] text-white", "bg-[#ffc53d] text-white",
+  "bg-[#3e63dd] text-white", "bg-[#12a594] text-white", "bg-[#e93d82] text-white", "bg-[#6e56cf] text-white",
 ];
 
 export function agentFaceColor(name: string) {
-  let hash = 0;
-  for (const char of name) hash = (Math.imul(hash, 31) + (char.codePointAt(0) ?? 0)) >>> 0;
+  let hash = 2166136261;
+  for (const char of name) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619) >>> 0;
   return facePalette[hash % facePalette.length];
 }

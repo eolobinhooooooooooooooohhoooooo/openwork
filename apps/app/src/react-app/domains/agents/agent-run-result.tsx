@@ -19,7 +19,7 @@ export function AgentRunResult(props: { runtime: AgentsRuntime; agentId: string;
   }
   if (!receipt || isActiveRun(receipt.run)) {
     return (
-      <p data-agent-run={props.runId} data-agent-run-state="working" data-agent-line className="animate-pulse text-[13px] leading-relaxed text-dls-secondary">
+      <p data-agent-run={props.runId} data-agent-run-state="working" data-agent-line className="motion-safe:animate-pulse text-[13px] leading-relaxed text-dls-secondary">
         {t("agents.run_working", { name: props.routineName })}
       </p>
     );

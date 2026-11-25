@@ -63,7 +63,7 @@ after(async () => { await runner.close(); await tracker.close(); await den.close
 
 const { orgId, owner: dana } = await den.createOrg(await den.signUp("Dana"), "Personal agents fixture")
 const lee = await den.newMember(dana, orgId, "Lee")
-await grantGatewayModels(den, dana, orgId, [dana, lee])
+const gatewayModels = await grantGatewayModels(den, dana, orgId, [dana, lee])
 const asDana = den.as(dana, orgId)
 const asLee = den.as(lee, orgId)
 const connected = await asDana("POST", "/v1/mcp-connections", {
@@ -287,6 +287,15 @@ test("a routine is an ordinary Automation that carries the agent's id and pins i
 })
 
 test("running the agent now is a manual Automation run whose instructions start from the pinned brief", async () => {
+  const { parseGatewayModelAlias } = await import("@openwork-ee/gateway-catalog")
+  const { GatewayProviderModelTable } = await import("@openwork-ee/den-db/schema")
+  const { eq } = await import("@openwork-ee/den-db/drizzle")
+  const { db } = await import("../../src/db.js")
+  const selected = parseGatewayModelAlias(gatewayModels["gpt-6-luna"])
+  assert.ok(selected)
+  const modelFilter = eq(GatewayProviderModelTable.id, selected.gatewayProviderModelId)
+  const [model] = await db.$primary.select().from(GatewayProviderModelTable).where(modelFilter)
+  await db.update(GatewayProviderModelTable).set({ model_config: { ...model.model_config, cost: { input: 2, output: 4 } } }).where(modelFilter)
   const started = await asDana("POST", `/v1/personal-agents/${agentId}/run`, {})
   assert.equal(started.status, 202, summary(started))
   const { run, routine, agentRevision } = personalAgentRunResponseSchema.parse(started.body)
@@ -303,6 +312,20 @@ test("running the agent now is a manual Automation run whose instructions start 
   const receipt = await settled(run.id)
   assert.equal(receipt.run.status, "succeeded", JSON.stringify(receipt.run.error))
   assert.equal(receipt.run.resultSummary, "Filed 2 issues from #bugs.")
+  const { automationRepository } = await import("../../src/automations/repository.js")
+  assert.deepEqual((await automationRepository.cloudRunTarget(run.id))?.model, {
+    providerId: "openai", modelId: gatewayModels["gpt-6-luna"],
+  })
+  assert.deepEqual(receipt.run.usage, { inputTokens: 120, outputTokens: 30, costMicros: 360 })
+  const agentPath = `/v1/personal-agents/${agentId}`
+  const detail = personalAgentDetailSchema.parse((await asDana("GET", agentPath)).body)
+  assert.equal(detail.spend.monthMicros, 360)
+  const adminBudgetPath = `/v1/org/personal-agents/${agentId}/budget`
+  assert.equal((await asDana("PUT", adminBudgetPath, { monthlyBudgetMicros: 360 })).status, 200)
+  const overBudget = personalAgentRunResponseSchema.parse((await asDana("POST", `${agentPath}/run`, {})).body)
+  assert.equal((await settled(overBudget.run.id)).run.error?.message, "This agent reached its budget for the month, so it did not run.")
+  assert.equal((await asDana("PUT", adminBudgetPath, { monthlyBudgetMicros: null })).status, 200)
+  await db.update(GatewayProviderModelTable).set({ model_config: model.model_config }).where(modelFilter)
   assert.equal(receipt.revision.agentRevisionId, agentRevision.id)
   assert.equal(turns.length, 1)
   const prompt = turns[0].prompt

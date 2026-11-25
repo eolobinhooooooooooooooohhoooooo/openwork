@@ -26,9 +26,9 @@ export function AgentShare({ agent, runtime }: { agent: PersonalAgentDetail; run
   const [adding, setAdding] = useState(false);
   const { client, organizationId } = runtime;
   const queryClient = useQueryClient();
-  const key = agentListKey(organizationId);
+  const key = agentListKey(runtime);
   const directory = useQuery({
-    queryKey: [...agentsQueryRoot(organizationId), "directory"],
+    queryKey: [...agentsQueryRoot(runtime), "directory"],
     queryFn: () => client.getLibraryOrgDirectory(organizationId),
     enabled: open && adding,
     staleTime: 60_000,
@@ -109,7 +109,7 @@ export function AgentShare({ agent, runtime }: { agent: PersonalAgentDetail; run
             {directory.isError ? <p className="p-2 text-sm text-muted-foreground">{t("agents.share_directory_failed")}</p> : (
               <Command items={people} itemToStringValue={(person) => typeof person === "object" && person !== null && "name" in person && typeof person.name === "string" ? person.name : ""}>
                 <CommandInput aria-label={t("agents.share_search")} placeholder={t("agents.share_search")} />
-                {directory.isPending ? <div aria-hidden="true" className="m-2 h-8 animate-pulse rounded-md bg-muted" /> : <CommandEmpty>{t("agents.share_empty")}</CommandEmpty>}
+                {directory.isPending ? <div aria-hidden="true" className="m-2 h-8 motion-safe:animate-pulse rounded-md bg-muted" /> : <CommandEmpty>{t("agents.share_empty")}</CommandEmpty>}
                 <CommandList className="max-h-52">
                   {(person: (typeof people)[number]) => (
                     <CommandItem key={person.id} value={person} onClick={() => {

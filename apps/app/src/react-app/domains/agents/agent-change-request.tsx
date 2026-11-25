@@ -22,7 +22,7 @@ export function changeRequestLine(request: Pick<PersonalAgentRequest, "status" |
 
 export function AgentChangeRequest({ runtime, agent, request }: { runtime: AgentsRuntime; agent: PersonalAgentDetail; request: PersonalAgentRequest }) {
   const titleId = useId();
-  const key = agentRequestsKey(runtime.organizationId, agent.agent.id);
+  const key = agentRequestsKey(runtime, agent.agent.id);
   const queryClient = useQueryClient();
   const decide = useMutation({
     mutationFn: (decision: "approve" | "deny") => runtime.client.decidePersonalAgentRequest(runtime.organizationId, agent.agent.id, request.id, decision),
@@ -30,7 +30,7 @@ export function AgentChangeRequest({ runtime, agent, request }: { runtime: Agent
       queryClient.setQueryData<PersonalAgentRequest[]>(key, (items) => items?.map((item) => item.id === decided.id ? decided : item));
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: key }),
-        queryClient.invalidateQueries({ queryKey: agentListKey(runtime.organizationId) }),
+        queryClient.invalidateQueries({ queryKey: agentListKey(runtime) }),
       ]);
     },
     onError: () => toast.error(t("agents.change_failed")),

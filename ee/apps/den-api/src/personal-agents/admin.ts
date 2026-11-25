@@ -1,5 +1,5 @@
-import { and, asc, desc, eq, inArray, isNotNull } from "@openwork-ee/den-db/drizzle"
-import { AuthUserTable, AutomationTable, MemberTable, PersonalAgentOrgPolicyTable, PersonalAgentRevisionTable, PersonalAgentShareTable, PersonalAgentTable } from "@openwork-ee/den-db/schema"
+import { and, asc, desc, eq, inArray, isNotNull, isNull } from "@openwork-ee/den-db/drizzle"
+import { AuthUserTable, AutomationRunTable, AutomationTable, MemberTable, PersonalAgentOrgPolicyTable, PersonalAgentRevisionTable, PersonalAgentShareTable, PersonalAgentTable } from "@openwork-ee/den-db/schema"
 import { isDenTypeId, normalizeDenTypeId } from "@openwork-ee/utils/typeid"
 import { personalAgentToolPolicyBlocks } from "@openwork/automations"
 import {
@@ -165,10 +165,13 @@ export async function changeAdminPersonalAgent(caller: PersonalAgentCaller, agen
       .innerJoin(AuthUserTable, eq(AuthUserTable.id, MemberTable.userId))
       .where(and(eq(MemberTable.id, agent.owner_member_id), eq(MemberTable.organizationId, agent.organization_id))).limit(1)
     const patch = { owner_member_id: newOwnerId, updated_at: now }
-    await tx.update(PersonalAgentTable).set(patch).where(filter)
-    await tx.update(AutomationTable).set(patch).where(and(
-      eq(AutomationTable.organization_id, agent.organization_id), eq(AutomationTable.agent_id, agent.id),
+    const routines = and(eq(AutomationTable.organization_id, agent.organization_id), eq(AutomationTable.agent_id, agent.id))
+    await tx.update(AutomationTable).set(patch).where(routines)
+    await tx.update(AutomationRunTable).set({ acting_member_id: agent.owner_member_id }).where(and(
+      isNull(AutomationRunTable.acting_member_id),
+      inArray(AutomationRunTable.automation_id, tx.select({ id: AutomationTable.id }).from(AutomationTable).where(routines)),
     ))
+    await tx.update(PersonalAgentTable).set(patch).where(filter)
     await tx.delete(PersonalAgentShareTable).where(and(
       eq(PersonalAgentShareTable.organization_id, agent.organization_id), eq(PersonalAgentShareTable.agent_id, agent.id),
       eq(PersonalAgentShareTable.member_id, newOwnerId),

@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import type { SessionExtensions } from "@/react-app/kernel/session-extensions";
 import { t } from "@/i18n";
 
-import { isStandingChat, useAgentChatStore } from "./agent-chat-store";
+import { agentChatsInScope, isStandingChat, useAgentChatStore } from "./agent-chat-store";
 import { AgentGreeting } from "./agent-greeting";
 import { AgentHeaderTitle } from "./agent-header";
 import { AgentPanel } from "./agent-panel";
@@ -28,14 +28,13 @@ const COMPONENTS = {
 };
 
 export function usePersonalAgentSessionExtensions(runtime: AgentsRuntime | null): SessionExtensions {
-  const organizationId = runtime?.organizationId ?? null;
   const chats = useAgentChatStore((state) => state.chats);
   const agents = useAgentListQuery(runtime, true).data;
   return useMemo(() => {
-    if (!organizationId) {
+    if (!runtime) {
       return { ...COMPONENTS, proposalCards: false, ownedSessionIds: NO_SESSION_IDS, hiddenSidebarSessionIds: NO_SESSION_IDS, composerPlaceholders: NO_PLACEHOLDERS };
     }
-    const owned = Object.values(chats).filter((chat) => chat.organizationId === organizationId);
+    const owned = agentChatsInScope(chats, runtime);
     const listed = agents ? new Set(agents.filter((item) => item.agent.state === "active").map((item) => item.agent.id)) : null;
     return {
       ...COMPONENTS,
@@ -51,5 +50,5 @@ export function usePersonalAgentSessionExtensions(runtime: AgentsRuntime | null)
           : chat.asked ? t("agents.placeholder_answer") : t("agents.placeholder_new"),
       ])),
     };
-  }, [agents, chats, organizationId]);
+  }, [agents, chats, runtime]);
 }

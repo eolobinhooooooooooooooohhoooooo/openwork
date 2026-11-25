@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PersonalAgentAccess, PersonalAgentTool, PersonalAgentToolPolicy } from "@openwork/types/den/personal-agents";
 
-import { agentOwnerFirstName, agentSpendLine, formatAgentMoney, requestToolTitle, toolAccessSummary, toolRequestReceipt } from "../src/react-app/domains/agents/agent-permission-words";
+import { agentOwnerFirstName, agentSpendLine, formatAgentMoney, requestToolTitle, shouldRerunAfterToolDecision, toolAccessSummary, toolRequestReceipt, toolRequestRerunLine } from "../src/react-app/domains/agents/agent-permission-words";
 import { nextAgentToolPolicy } from "../src/react-app/domains/agents/use-agent-permissions";
 
 const dana = { memberId: "member-dana", name: "Dana Reyes" };
@@ -47,6 +47,23 @@ describe("personal agent permissions", () => {
     expect(toolRequestReceipt({ ...request, status: "used" }, "Bug watcher")).toBe("Bug watcher can use Post a message this time");
     expect(toolRequestReceipt({ ...request, status: "always_allowed" }, "Bug watcher")).toBe("Bug watcher can use Post a message from now on");
     expect(toolRequestReceipt({ ...request, status: "pending" }, "Bug watcher")).toBeNull();
+  });
+
+  test("only allowing your own request starts another run", () => {
+    expect(shouldRerunAfterToolDecision({ requestedByCaller: true }, "allow_once")).toBe(true);
+    expect(shouldRerunAfterToolDecision({ requestedByCaller: true }, "always_allow")).toBe(true);
+    expect(shouldRerunAfterToolDecision({ requestedByCaller: true }, "deny")).toBe(false);
+    expect(shouldRerunAfterToolDecision({ requestedByCaller: false }, "allow_once")).toBe(false);
+    expect(shouldRerunAfterToolDecision({ requestedByCaller: false }, "always_allow")).toBe(false);
+  });
+
+  test("an approval for someone else names the requester without claiming a run started", () => {
+    const request = { requestedByCaller: false, requestedBy: { memberId: "member-priya", name: "Priya Nair" } };
+    expect(toolRequestRerunLine({ ...request, status: "allowed_once" })).toBe("Priya can run it again now.");
+    expect(toolRequestRerunLine({ ...request, status: "always_allowed" })).toBe("Priya can run it again now.");
+    expect(toolRequestRerunLine({ ...request, status: "allowed_once", requestedByCaller: true })).toBeNull();
+    expect(toolRequestRerunLine({ ...request, status: "denied" })).toBeNull();
+    expect(toolRequestRerunLine({ ...request, status: "used" })).toBeNull();
   });
 
   test("formats micros as dollars and distinguishes no budget from zero budget", () => {

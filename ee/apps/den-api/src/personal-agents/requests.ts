@@ -5,7 +5,7 @@ import type { PersonalAgentChange, PersonalAgentRequest, PersonalAgentRequestDec
 import { automationService } from "../automations/service.js"
 import { db } from "../db.js"
 import { canManagePersonalAgent, personalAgentOwnerScope, personalAgentPeople, personOrUnknown, type PersonalAgentAccess, type PersonalAgentCaller } from "./access.js"
-import { recordPersonalAgentEvent } from "./events.js"
+import { personalAgentRequestEventDetail, recordPersonalAgentEvent } from "./events.js"
 import { personalAgentRepository } from "./repository.js"
 import { personalAgentService } from "./service.js"
 
@@ -21,6 +21,7 @@ async function requestViews(access: PersonalAgentAccess, memberId: string, rows:
   const people = await personalAgentPeople(access.organizationId, rows.flatMap((row) => [row.requested_by_member_id, ...(row.decided_by_member_id ? [row.decided_by_member_id] : [])]))
   return rows.map((row) => ({
     id: row.id, agentId: row.agent_id, kind: row.kind, status: row.status, requestedBy: personOrUnknown(people, row.requested_by_member_id),
+    requestedByCaller: row.requested_by_member_id === memberId,
     runId: row.run_id, connectionId: row.connection_id, connectionName: row.connection_name, toolName: row.tool_name, toolTitle: row.tool_title,
     summary: row.summary, change: row.change, decidedBy: row.decided_by_member_id ? personOrUnknown(people, row.decided_by_member_id) : null,
     decidedAt: row.decided_at?.getTime() ?? null, createdAt: row.created_at.getTime(), canDecide: decisions(access, memberId, row),
@@ -69,9 +70,12 @@ export async function createPersonalAgentChangeRequest(access: PersonalAgentAcce
     id, organization_id: normalizeDenTypeId("organization", access.organizationId), agent_id: normalizeDenTypeId("personalAgent", access.agentId),
     kind: "change", requested_by_member_id: memberId, summary: input.summary, change: changed,
   })
-  await recordPersonalAgentEvent({ organizationId: access.organizationId, agentId: access.agentId, actorMemberId: memberId, action: "request.asked", detail: { summary: input.summary.slice(0, 240) } })
   const [row] = await db.$primary.select().from(PersonalAgentRequestTable).where(eq(PersonalAgentRequestTable.id, id)).limit(1)
-  return (await requestViews(access, memberId, [row]))[0]
+  const [view] = await requestViews(access, memberId, [row])
+  await recordPersonalAgentEvent({ organizationId: access.organizationId, agentId: access.agentId, actorMemberId: memberId, action: "request.asked",
+    detail: personalAgentRequestEventDetail({ requester: view.requestedBy.name, kind: view.kind, change: changed }),
+  })
+  return view
 }
 
 const decisionsApplied = { deny: "denied", allow_once: "allowed_once", always_allow: "always_allowed", approve: "approved" } as const
@@ -114,7 +118,7 @@ export async function decidePersonalAgentRequest(access: PersonalAgentAccess, ca
   if (!row) return null
   const [view] = await requestViews(access, memberId, [row])
   await recordPersonalAgentEvent({ organizationId: access.organizationId, agentId: access.agentId, actorMemberId: memberId,
-    action: `request.${decisionsApplied[decision]}`, detail: { requester: view.requestedBy.name.slice(0, 240), ...(row.kind === "tool" ? { tool: row.tool_title } : { summary: row.summary?.slice(0, 240) ?? null }) },
+    action: `request.${decisionsApplied[decision]}`, detail: personalAgentRequestEventDetail({ requester: view.requestedBy.name, kind: row.kind, tool: row.tool_title, connection: row.connection_name, change: row.change }),
   })
   return view
 }

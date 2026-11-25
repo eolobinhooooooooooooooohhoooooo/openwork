@@ -2,10 +2,14 @@ import { createContext, useContext } from "react";
 
 import type { DenClient } from "@/app/lib/den";
 
-export type AgentsRuntime = {
-  client: DenClient;
+export type AgentScope = {
+  denBaseUrl: string;
   organizationId: string;
-  principalId: string;
+  principal: string;
+};
+
+export type AgentsRuntime = AgentScope & {
+  client: DenClient;
   workspaceId: string;
   selectedSessionId: string | null;
   createSession: (workspaceId: string) => Promise<string | null>;

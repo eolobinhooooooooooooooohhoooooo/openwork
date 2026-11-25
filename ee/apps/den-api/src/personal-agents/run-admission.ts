@@ -1,10 +1,11 @@
-import { and, eq, or } from "@openwork-ee/den-db/drizzle"
-import { PersonalAgentRequestTable, PersonalAgentRevisionTable, PersonalAgentTable } from "@openwork-ee/den-db/schema"
+import { and, eq, isNull, or } from "@openwork-ee/den-db/drizzle"
+import { MemberTable, PersonalAgentRequestTable, PersonalAgentRevisionTable, PersonalAgentTable } from "@openwork-ee/den-db/schema"
 import { normalizeDenTypeId } from "@openwork-ee/utils/typeid"
 import { personalAgentToolPolicyBlocks } from "@openwork/automations"
 import { EMPTY_PERSONAL_AGENT_TOOL_POLICY } from "@openwork/types/den/personal-agents"
 import { db } from "../db.js"
 import { agentToolLimitScopes, headlessRunTokenScopes, personalAgentRunScope, personalAgentToolChoiceScope } from "../mcp/workbot-turn-limits.js"
+import { personalAgentAccess } from "./access.js"
 import { personalAgentOrgPolicy, personalAgentPolicyBlocks } from "./permissions-policy.js"
 import { personalAgentRepository } from "./repository.js"
 import { personalAgentSpend } from "./spend.js"
@@ -14,13 +15,13 @@ export type PersonalAgentRunAdmission =
   | { ok: false; code: "execution_failed" | "execution_runtime_unavailable"; message: string }
 
 export async function admitPersonalAgentRun(input: {
-  agentRevisionId: string
+  agentRevisionId: string | undefined
   runId: string
   organizationId: string
   actingMemberId: string
   headless: boolean
 }): Promise<PersonalAgentRunAdmission> {
-  const pinned = await personalAgentRepository.runDefinition(input.agentRevisionId)
+  const pinned = input.agentRevisionId && await personalAgentRepository.runDefinition(input.agentRevisionId)
   if (!pinned || pinned.archived) {
     return { ok: false, code: "execution_failed", message: "This routine's agent no longer exists, so it did not run." }
   }
@@ -30,7 +31,13 @@ export async function admitPersonalAgentRun(input: {
     .from(PersonalAgentTable).innerJoin(PersonalAgentRevisionTable, eq(PersonalAgentRevisionTable.id, PersonalAgentTable.current_revision_id))
     .where(and(eq(PersonalAgentTable.id, agentId), eq(PersonalAgentTable.organization_id, organizationId))).limit(1)
   if (!current) return { ok: false, code: "execution_failed", message: "This routine's agent no longer exists, so it did not run." }
-  if (current.paused) return { ok: false, code: "execution_failed", message: "An admin paused this agent, so it did not run." }
+  const memberId = normalizeDenTypeId("member", input.actingMemberId)
+  const [member] = await db.$primary.select({ id: MemberTable.id }).from(MemberTable).where(and(
+    eq(MemberTable.id, memberId), eq(MemberTable.organizationId, organizationId), isNull(MemberTable.removedAt),
+  )).limit(1)
+  const access = member && await personalAgentAccess({ organizationId, memberId }, agentId)
+  if (!access) return { ok: false, code: "execution_failed", message: "The person this run is for no longer has access to this agent, so it did not run." }
+  if (current.paused || access.pausedAt !== null) return { ok: false, code: "execution_failed", message: "An admin paused this agent, so it did not run." }
   if (!input.headless) {
     return { ok: false, code: "execution_runtime_unavailable", message: "This agent limits which tools it may use, and only OpenWork Cloud's headless runtime can apply that. The run was not started." }
   }
@@ -41,7 +48,6 @@ export async function admitPersonalAgentRun(input: {
   if (spend.get(agentId)?.overBudget) return { ok: false, code: "execution_failed", message: "This agent reached its budget for the month, so it did not run." }
   const orgTools = organizationPolicy?.tool_policy ?? EMPTY_PERSONAL_AGENT_TOOL_POLICY
   const runId = normalizeDenTypeId("automationRun", input.runId)
-  const memberId = normalizeDenTypeId("member", input.actingMemberId)
   const blocked = (connectionId: string, toolName: string) => personalAgentPolicyBlocks(orgTools, connectionId, toolName) || personalAgentPolicyBlocks(pinned.toolPolicy, connectionId, toolName)
   const choices = new Set([
     personalAgentRunScope(runId),

@@ -1,6 +1,8 @@
-import type { PersonalAgentConnectionTools, PersonalAgentPerson, PersonalAgentRequest, PersonalAgentSpend } from "@openwork/types/den/personal-agents";
+import type { PersonalAgentConnectionTools, PersonalAgentPerson, PersonalAgentRequest, PersonalAgentRequestDecision, PersonalAgentSpend } from "@openwork/types/den/personal-agents";
 
 import { currentLocale, t } from "@/i18n";
+
+import { firstName } from "./agent-words";
 
 export function toolAccessSummary(connection: Pick<PersonalAgentConnectionTools, "available" | "lockedByOrganization" | "tools">): string {
   if (connection.lockedByOrganization) return t("agents.permissions_admin_blocked");
@@ -43,6 +45,15 @@ export function toolRequestReceipt(
     default:
       return null;
   }
+}
+
+export function shouldRerunAfterToolDecision(request: Pick<PersonalAgentRequest, "requestedByCaller">, decision: PersonalAgentRequestDecision): boolean {
+  return request.requestedByCaller === true && (decision === "allow_once" || decision === "always_allow");
+}
+
+export function toolRequestRerunLine(request: Pick<PersonalAgentRequest, "requestedByCaller" | "requestedBy" | "status">): string | null {
+  if (request.requestedByCaller || (request.status !== "allowed_once" && request.status !== "always_allowed")) return null;
+  return t("agents.permission_ask_requester_can_run", { name: firstName(request.requestedBy.name) || t("agents.permission_ask_requester") });
 }
 
 export function formatAgentMoney(micros: number, fractionDigits = 2): string {

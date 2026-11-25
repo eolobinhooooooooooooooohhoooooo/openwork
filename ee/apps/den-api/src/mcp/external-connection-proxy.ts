@@ -35,8 +35,8 @@ import {
   mcpMemberForToken,
   resolveMcpMemberIdentity,
 } from "./external-capabilities.js"
-import { toolsWithheld } from "./workbot-turn-limits.js"
-import { personalAgentToolRefusal } from "../personal-agents/permissions-dispatch.js"
+import { personalAgentRunId, toolsWithheld } from "./workbot-turn-limits.js"
+import { PERSONAL_AGENT_UNAPPROVABLE_WRITE, personalAgentPolicyRefusal, personalAgentToolRefusal } from "../personal-agents/permissions-dispatch.js"
 import { externalMcpToolSchemaDigest } from "./external-mcp-tool-arguments.js"
 import { InventoryEventBus, type InventoryRevision } from "./inventory-event-bus.js"
 import { preflightMcpJsonRpcRequest } from "./json-rpc-preflight.js"
@@ -519,6 +519,7 @@ export function registerExternalConnectionProxyRoutes<T extends { Variables: Req
 
     const requestedId = c.req.param("connectionId")
     if (isMcpAppServerId(requestedId)) {
+      if (personalAgentRunId(principal.scopes) !== undefined) return c.json(personalAgentPolicyRefusal(PERSONAL_AGENT_UNAPPROVABLE_WRITE), 403)
       return handleMcpAppServerRequest({ app: app as unknown as Hono, context: c, principal, appId: requestedId })
     }
 

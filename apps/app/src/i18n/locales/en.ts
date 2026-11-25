@@ -2679,6 +2679,8 @@ export default {
   "agents.permission_ask_denied": "{decider} said no, so {agent} didn't use {tool}",
   "agents.permission_ask_once_receipt": "{agent} can use {tool} this time",
   "agents.permission_ask_always_receipt": "{agent} can use {tool} from now on",
+  "agents.permission_ask_requester_can_run": "{name} can run it again now.",
+  "agents.permission_ask_requester": "The requester",
   "agents.permission_ask_you": "You",
   "agents.permission_ask_tool": "a tool",
   "agents.permission_ask_connection": "a connected app",

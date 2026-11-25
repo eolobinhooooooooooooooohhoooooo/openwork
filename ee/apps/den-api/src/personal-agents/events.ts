@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "@openwork-ee/den-db/drizzle"
 import { PersonalAgentEventTable, PersonalAgentTable } from "@openwork-ee/den-db/schema"
 import { createDenTypeId, isDenTypeId, normalizeDenTypeId } from "@openwork-ee/utils/typeid"
-import type { PersonalAgentEvent, PersonalAgentEventDetail } from "@openwork/types/den/personal-agents"
+import type { PersonalAgentChange, PersonalAgentEvent, PersonalAgentEventDetail } from "@openwork/types/den/personal-agents"
 import { db } from "../db.js"
 import { personalAgentPeople, personOrUnknown } from "./access.js"
 
@@ -12,6 +12,22 @@ export type PersonalAgentEventAction =
   | "routine.created" | "routine.changed"
   | "request.asked" | "request.denied" | "request.allowed_once" | "request.always_allowed" | "request.approved"
   | "organization.tools_changed" | "organization.budget_set"
+
+export function personalAgentRequestEventDetail(request: {
+  requester: string
+  kind: "tool" | "change"
+  tool?: string | null
+  connection?: string | null
+  change?: PersonalAgentChange | null
+}): PersonalAgentEventDetail {
+  return {
+    requester: request.requester.slice(0, 240),
+    kind: request.kind,
+    tool: request.tool ?? null,
+    connection: request.connection ?? null,
+    changes: request.change ? ["schedule", "instructions", "brief"].filter((field) => field in (request.change ?? {})).join(", ") : null,
+  }
+}
 
 export async function recordPersonalAgentEvent(input: {
   organizationId: string

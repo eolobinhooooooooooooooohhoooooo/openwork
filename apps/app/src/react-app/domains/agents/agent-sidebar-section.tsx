@@ -6,11 +6,11 @@ import { SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, Side
 import { t } from "@/i18n";
 
 import { resolveAgentChatSession } from "./agent-chat-session";
-import { agentChatForAgent, useAgentChatStore, type AgentChat } from "./agent-chat-store";
+import { agentChatForAgent, agentChatsInScope, useAgentChatStore, type AgentChat } from "./agent-chat-store";
 import { AgentFace } from "./agent-face";
 import { firstName } from "./agent-words";
 import { useAgentsRuntime } from "./agents-runtime";
-import { isActiveRun, useAgentListQuery } from "./use-agents";
+import { agentsQueryRoot, isActiveRun, useAgentListQuery } from "./use-agents";
 
 type AgentRow = {
   key: string;
@@ -22,22 +22,19 @@ type AgentRow = {
   working?: boolean;
 };
 
-function unusedDraft(chats: Record<string, AgentChat>, organizationId: string, workspaceId: string): AgentChat | null {
-  return Object.values(chats).find((chat) => chat.organizationId === organizationId && chat.workspaceId === workspaceId && !chat.agentId && !chat.asked) ?? null;
-}
-
 export function AgentSidebarSection() {
   const runtime = useAgentsRuntime();
   const chats = useAgentChatStore((state) => state.chats);
   const agents = useAgentListQuery(runtime).data;
   const open = useMutation({
+    mutationKey: [...agentsQueryRoot(runtime), "open-chat"],
     mutationFn: async (row: AgentRow | null) => {
       if (!runtime) return;
-      const { organizationId, workspaceId, client } = runtime;
+      const { denBaseUrl, organizationId, principal, workspaceId, client } = runtime;
       const store = useAgentChatStore.getState();
       const agentId = row?.agentId;
       if (agentId) {
-        const chat = agentChatForAgent(store.chats, organizationId, workspaceId, agentId);
+        const chat = agentChatForAgent(store.chats, runtime, workspaceId, agentId);
         const { sessionId, source } = await resolveAgentChatSession({
           localSessionId: chat?.sessionId ?? null,
           readPointer: async () => (await client.getPersonalAgentChat(organizationId, agentId, workspaceId)).chat?.sessionId ?? null,
@@ -45,28 +42,29 @@ export function AgentSidebarSection() {
           createSession: () => runtime.createSession(workspaceId),
         });
         if (!sessionId) throw new Error(t("agents.open_failed"));
-        store.open({ organizationId, workspaceId, sessionId, agentId, agentName: row.name });
+        store.open({ denBaseUrl, organizationId, principal, workspaceId, sessionId, agentId, agentName: row.name });
         if (source === "new") {
-          store.save(sessionId, { chatLinkPending: true });
+          store.save(runtime, sessionId, { chatLinkPending: true });
           if (row.name) runtime.renameSession(workspaceId, sessionId, row.name);
         } else {
           runtime.openSession(workspaceId, sessionId);
         }
         if (source === "new" || (source === "local" && chat?.chatLinkPending)) {
           await client.setPersonalAgentChat(organizationId, agentId, { workspaceId, sessionId });
-          store.save(sessionId, { chatLinkPending: false });
+          store.save(runtime, sessionId, { chatLinkPending: false });
         }
         return;
       }
-      const draft = row?.chat ?? unusedDraft(store.chats, organizationId, workspaceId);
+      const draft = row?.chat ?? agentChatsInScope(store.chats, runtime)
+        .find((chat) => chat.workspaceId === workspaceId && !chat.agentId && !chat.asked);
       if (draft) {
         if (await runtime.sessionState(workspaceId, draft.sessionId) !== "gone") return runtime.openSession(workspaceId, draft.sessionId);
-        store.forget(draft.sessionId);
+        store.forget(runtime, draft.sessionId);
         if (row) return;
       }
       const sessionId = await runtime.createSession(workspaceId);
       if (!sessionId) throw new Error(t("agents.open_failed"));
-      store.open({ organizationId, workspaceId, sessionId });
+      store.open({ denBaseUrl, organizationId, principal, workspaceId, sessionId });
     },
     onError: () => toast.error(t("agents.open_failed")),
   });
@@ -77,13 +75,13 @@ export function AgentSidebarSection() {
       key: item.agent.id,
       name: item.agent.name,
       agentId: item.agent.id,
-      chat: agentChatForAgent(chats, runtime.organizationId, runtime.workspaceId, item.agent.id),
+      chat: agentChatForAgent(chats, runtime, runtime.workspaceId, item.agent.id),
       ownerName: item.role === "owner" ? undefined : firstName(item.owner?.name),
       needsAttention: item.openRequestCount > 0,
       working: item.routines.some((routine) => isActiveRun(routine.latestRun)),
     })),
-    ...Object.values(chats)
-      .filter((chat) => chat.organizationId === runtime.organizationId && chat.workspaceId === runtime.workspaceId && chat.agentId === null)
+    ...agentChatsInScope(chats, runtime)
+      .filter((chat) => chat.workspaceId === runtime.workspaceId && chat.agentId === null)
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((chat) => ({ key: chat.sessionId, name: chat.agentName, agentId: null, chat })),
   ];
@@ -121,7 +119,7 @@ export function AgentSidebarSection() {
                 <span className="min-w-0 flex-1 truncate">{row.name ?? t("agents.new")}</span>
                 {row.ownerName ? <small className="max-w-20 truncate text-[11px] text-muted-foreground">{t("agents.row_from", { name: row.ownerName })}</small> : null}
                 {row.needsAttention ? <span role="img" aria-label={t("agents.row_needs_attention")} className="size-1.5 shrink-0 rounded-full bg-amber-9" />
-                  : row.working ? <span role="status" aria-label={t("agents.row_working")} className="size-1.5 shrink-0 animate-pulse rounded-full bg-blue-9" /> : null}
+                  : row.working ? <span role="status" aria-label={t("agents.row_working")} className="size-1.5 shrink-0 motion-safe:animate-pulse rounded-full bg-blue-9" /> : null}
               </SidebarMenuButton>
             </SidebarMenuItem>
           ))}
