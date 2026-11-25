@@ -21,18 +21,32 @@ them. The owner's own chat and their other Automations are not affected.
 
 Only the owner sees or changes their agents.
 
+## In the app
+
+With the feature on, the sidebar has an Agents section. Its + opens a new
+agent's chat: the agent asks what it should do, the member answers in one
+message, and one card asks "Start like this?". Saying yes creates the agent,
+its first routine and the first run. The run's result appears in the same
+chat. Each agent is listed once and keeps one conversation; its name in the
+header opens a small panel with an on/off switch, the next run, its routines
+and Run now.
+
 ## What is built so far
 
-This is the first step: the storage, the API and the OpenWork Connect
-capabilities, so an agent can be made and run from chat. Not built yet:
+The storage, the API, the OpenWork Connect capabilities and the agent chat in
+the app. Not built yet:
 
-- a screen for agents in the desktop app or on the web
+- asking the owner before an agent's first change in an app (cloud runs are
+  unattended)
+- settings for an agent in the app: its brief, its tools, its budget
 - enforcing the monthly spending limit (it is stored with the agent)
 - sharing an agent with teammates
 - limiting built-in connectors such as Google Workspace per agent (a tool
   policy that names one is refused)
 - running a routine on the owner's desktop
-- reporting to the owner in a Workbot DM
+- telling the owner about a result while the chat is closed
+- the same conversation on another computer: which chat belongs to which agent
+  is remembered on this computer only
 
 ## How it works
 
@@ -55,8 +69,15 @@ capabilities, so an agent can be made and run from chat. Not built yet:
   admin keeps a connection from Workbot, so search, direct calls and Code Mode
   all leave them out. A run that cannot be limited this way does not start.
 
+- In the app, a chat that belongs to an agent is an ordinary session. The chat
+  model offers the agent through `agent.propose`, which only draws the card;
+  the app calls `/v1/personal-agents` when the member says yes. The app code
+  is `apps/app/src/react-app/domains/agents/`.
+
 ## Verify
 
 `ee/apps/den-api/test/api/personal-agents.api.test.ts` covers the flag, the
 versions, a routine as an Automation, the prompt of a manual run, and a blocked
-tool.
+tool. `apps/app/tests/personal-agent-start.test.ts` covers what
+saying yes does: the order of the three calls, a retry that makes nothing
+twice, and two confirmations at once.
